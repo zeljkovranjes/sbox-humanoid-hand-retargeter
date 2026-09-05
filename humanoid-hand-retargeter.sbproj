@@ -8,6 +8,6 @@
   "PackageReferences": [],
   "IsStandaloneOnly": false,
   "Metadata": {
-    "Summary": "Humanoid/FPS hand and arm retargeting library (in development)."
+    "Summary": "Editor tool for humanoid/FPS hand and arm retargeting, preview and validated ModelDoc setup."
   }
 }

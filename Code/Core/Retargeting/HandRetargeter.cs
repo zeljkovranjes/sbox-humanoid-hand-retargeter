@@ -19,9 +19,14 @@ public static class HandRetargeter
     /// <summary>Retains timing and fixes quaternion signs. Stateful angle unwrapping is
     /// local to this clip, so a calibrated profile may safely be shared by concurrent jobs.</summary>
     public static Clip RetargetClip(HandRetargetProfile profile, Clip sourceClip, CancellationToken cancellationToken = default)
+        => Bake(profile, sourceClip, new HandMotionOptions { TransferWristPosition = false }, cancellationToken);
+
+    /// <summary>The shared editor preview/export bake including optional wrist travel and arm IK.</summary>
+    public static Clip Bake(HandRetargetProfile profile, Clip sourceClip, HandMotionOptions options, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(sourceClip);
+        ArgumentNullException.ThrowIfNull(options);
         if (sourceClip.FrameCount == 0)
             throw new RigValidationException(new[] { new RigIssue("empty-clip", "Source animation has no frames.") });
         var frames = new List<XForm[]>(sourceClip.FrameCount);
@@ -30,10 +35,57 @@ public static class HandRetargeter
         {
             cancellationToken.ThrowIfCancellationRequested();
             var pose = Solve(profile, new Pose(sourceFrame), continuity);
+            if (options.TransferWristPosition) ApplyWristMotion(profile, new Pose(sourceFrame), pose, options);
+            if(profile.PreservedTracks.Length>0)
+            {
+                var sourceWorld=new Pose(sourceFrame).ToWorld(profile.Source);
+                foreach(var pair in profile.PreservedTracks)
+                {
+                    var targetWorld=pose.ToWorld(profile.Target);var parent=profile.Target[pair.Target].ParentIndex;
+                    pose.Locals[pair.Target]=parent<0?sourceWorld[pair.Source]:XForm.ToLocal(targetWorld[parent],sourceWorld[pair.Source]);
+                }
+            }
             frames.Add(pose.Locals);
         }
         QuaternionContinuity.AlignFrames(frames);
         return new Clip(sourceClip.Name, sourceClip.Fps, sourceClip.Looping, frames, sourceClip.NativeFps);
+    }
+
+    private static void ApplyWristMotion(HandRetargetProfile profile, Pose source, Pose target, HandMotionOptions options)
+    {
+        var sourceWorld = source.ToWorld(profile.Source);
+        foreach (var pair in profile.WristMotion)
+        {
+            var world = target.ToWorld(profile.Target);
+            var travel = Vector3.Transform(sourceWorld[pair.Source].Pos - profile.Source.RestWorld[pair.Source].Pos, options.WristTravelBasis ?? pair.Basis);
+            var desired = profile.Target.RestWorld[pair.Target].Pos + travel * (options.ScaleWristTravel ? pair.Scale : 1f);
+            var wristRotation = world[pair.Target].Rot;
+            if (options.SolveArmIk && pair.UpperArm is int upper && pair.Forearm is int lower)
+            {
+                if (Vector3.DistanceSquared(world[pair.Target].Pos, desired) < 1e-8f) continue;
+                var correction = TwoBoneIk.Solve(world[upper].Pos, world[lower].Pos, world[pair.Target].Pos, desired, 0, pair.BendAxis);
+                void SetWorldRotation(int bone, Quaternion rotation)
+                {
+                    var parent = profile.Target[bone].ParentIndex;
+                    target.Locals[bone].Rot = MathQ.Normalize(parent < 0 ? rotation : Quaternion.Conjugate(world[parent].Rot) * rotation);
+                    world = target.ToWorld(profile.Target);
+                }
+                var oldLower = world[lower].Rot;
+                SetWorldRotation(upper, correction.UpperWorldDelta * world[upper].Rot);
+                SetWorldRotation(lower, correction.LowerWorldDelta * oldLower);
+                SetWorldRotation(pair.Target, wristRotation);
+            }
+            else
+            {
+                // Partial rigs cannot reach with a two-link chain. Preserve the authored
+                // wrist path by translating the wrist relative to its actual parent.
+                var parent = profile.Target[pair.Target].ParentIndex;
+                target.Locals[pair.Target].Pos = parent < 0 ? desired
+                    : Vector3.Transform(desired - world[parent].Pos, Quaternion.Conjugate(world[parent].Rot));
+            }
+        }
+        var errors = PoseValidator.Validate(profile.Target, target);
+        if (errors.Count > 0) throw new RigValidationException(errors);
     }
 
     private static Pose Solve(HandRetargetProfile profile, Pose sourcePose, AngleHistory? history)

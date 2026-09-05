@@ -20,7 +20,7 @@ public static class VmdlSetupTransaction
     private static readonly SemaphoreSlim Gate = new(1, 1);
 
     public static async Task<VmdlCommitResult> CommitAsync(string assetsDirectory, string modelPath,
-        string expectedVmdl, VmdlSetupResult prepared, IReadOnlyDictionary<string, string> animations,
+        string? expectedVmdl, VmdlSetupResult prepared, IReadOnlyDictionary<string, string> animations,
         Func<IReadOnlyList<string>, CancellationToken, Task<bool>> compileAndValidate,
         bool backupExisting = true, CancellationToken cancellationToken = default)
     {
@@ -33,9 +33,9 @@ public static class VmdlSetupTransaction
             var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(assetsDirectory));
             if (!Directory.Exists(root)) throw new DirectoryNotFoundException(root);
             var model = Resolve(modelPath, ".vmdl");
-            var modelBytes = File.ReadAllBytes(model);
-            using var reader = new StreamReader(new MemoryStream(modelBytes), Encoding.UTF8, true);
-            if (reader.ReadToEnd() != expectedVmdl)
+            var modelBytes = File.Exists(model) ? File.ReadAllBytes(model) : null;
+            using var reader = new StreamReader(new MemoryStream(modelBytes ?? Array.Empty<byte>()), Encoding.UTF8, true);
+            if ((modelBytes is null) != (expectedVmdl is null) || (modelBytes is not null && reader.ReadToEnd() != expectedVmdl))
                 throw new IOException("The target VMDL changed after setup was prepared. Inspect it again before saving.");
             var writes = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
             foreach (var (path, content) in animations)
@@ -56,7 +56,7 @@ public static class VmdlSetupTransaction
                 writes.Add(graph, bytes);
             }
             // Dictionary insertion order leaves the owner VMDL last, after its inputs.
-            writes.Add(model, prepared.Changed ? Encoding.UTF8.GetBytes(prepared.VmdlText) : modelBytes);
+            writes.Add(model, prepared.Changed || modelBytes is null ? Encoding.UTF8.GetBytes(prepared.VmdlText) : modelBytes);
             var previous = writes.Keys.ToDictionary(p => p, p => File.Exists(p) ? File.ReadAllBytes(p) : null,
                 StringComparer.OrdinalIgnoreCase);
             previous[model] = modelBytes;
@@ -78,7 +78,7 @@ public static class VmdlSetupTransaction
                     // VMDL after dependencies. Never silently replace a concurrent edit.
                     var current = File.Exists(path) ? File.ReadAllBytes(path) : null;
                     if (!Equal(current, previous[path])) throw new IOException($"'{path}' changed while saving.");
-                    if (path == model && backupExisting)
+                    if (path == model && backupExisting && modelBytes is not null)
                     {
                         backup = model + "." + Guid.NewGuid().ToString("N") + ".bak";
                         File.WriteAllBytes(backup, previous[path]!);

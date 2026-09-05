@@ -26,6 +26,9 @@ public sealed class DmxWriteOptions
     /// system; when false it declares Z-up. Data is written as-is either way.</summary>
     public bool UpAxisY { get; set; } = true;
 
+    /// <summary>DMX forward-axis parity: 1 for s&box Z-up/X-forward data, 2 for the inherited FBX convention.</summary>
+    public int ForwardParity { get; set; } = 2;
+
     /// <summary>
     /// Skeleton bone indices that get NO DmeChannel pair: the bones keep their DmeJoint and
     /// bind (rest) transform, but no animation channels are written for them — the engine then
@@ -60,6 +63,7 @@ public static class DmxWriter
         ArgumentNullException.ThrowIfNull(skeleton);
         ArgumentNullException.ThrowIfNull(clip);
         ArgumentNullException.ThrowIfNull(options);
+        if(options.ForwardParity is not (1 or 2))throw new ArgumentOutOfRangeException(nameof(options.ForwardParity));
         ArgumentNullException.ThrowIfNull(options.Name);
         ArgumentNullException.ThrowIfNull(options.SourceNote);
 
@@ -143,7 +147,7 @@ public static class DmxWriter
         w.Attr("upAxis", "string", options.UpAxisY ? "Y" : "Z");
         w.BeginInlineAttr("axisSystem", "DmeAxisSystem");
         w.Attr("upAxis", "int", options.UpAxisY ? "2" : "3");
-        w.Attr("forwardParity", "int", "2");
+        w.Attr("forwardParity", "int", options.ForwardParity.ToString(System.Globalization.CultureInfo.InvariantCulture));
         w.Attr("coordSys", "int", "0");
         w.EndInlineAttr();
         w.Attr("animationList", "element", animListGuid);

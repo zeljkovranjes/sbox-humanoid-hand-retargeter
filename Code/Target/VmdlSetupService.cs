@@ -91,7 +91,8 @@ public static class VmdlSetupService
             && string.IsNullOrWhiteSpace(root.GetString("anim_graph_name")))
         {
             graphPath = modelPath[..^5] + "_hands.vanmgrph";
-            var idle = entries.FirstOrDefault(e => e.Looping);
+            var idle = entries.FirstOrDefault(e => e.Looping && e.Name.Contains("idle", StringComparison.OrdinalIgnoreCase)
+                && !e.Name.EndsWith("_delta", StringComparison.OrdinalIgnoreCase));
             var initialSequence = idle is null ? bindName : configured.Single(c => c.RequestedName == idle.Name).SequenceName;
             graphText = HandAnimGraph.Create(initialSequence, modelPath);
             root["anim_graph_name"] = new KvString(graphPath);

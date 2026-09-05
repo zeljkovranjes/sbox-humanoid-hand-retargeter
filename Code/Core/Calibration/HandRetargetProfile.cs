@@ -16,6 +16,8 @@ public sealed class HandRetargetProfile
     public IReadOnlyList<string> Notes { get; }
     internal RotationPair[] Pairs { get; }
     internal DigitDistribution[] Distributions { get; }
+    internal (int Source,int Target)[] PreservedTracks {get;private set;}=Array.Empty<(int,int)>();
+    internal WristMotionPair[] WristMotion { get; private set; } = Array.Empty<WristMotionPair>();
 
     private HandRetargetProfile(SkeletonModel source, SkeletonModel target, List<RotationPair> pairs,
         List<DigitDistribution> distributions, List<string> notes)
@@ -26,6 +28,10 @@ public sealed class HandRetargetProfile
         Distributions = distributions.ToArray();
         Notes = notes.AsReadOnly();
     }
+
+    /// <summary>Build a manual palm frame from model-space forward and dorsal directions.</summary>
+    public static bool TryCreatePalmFrame(Vector3 forward, Vector3 dorsal, out Quaternion frame)
+        => HandFrames.TryBasis(forward, dorsal, out frame);
 
     /// <summary>Palm overrides are world-space semantic frames (X forward, Z dorsal), only
     /// needed when geometry cannot determine a palm plane. Ambiguous automatic maps must be corrected first.</summary>
@@ -47,6 +53,7 @@ public sealed class HandRetargetProfile
         var pairs = new List<RotationPair>();
         var distributions = new List<DigitDistribution>();
         var notes = new List<string>();
+        var wristMotion = new List<WristMotionPair>();
         var matchedHands = 0;
         foreach (var targetHand in targetMap.Hands)
         {
@@ -63,6 +70,13 @@ public sealed class HandRetargetProfile
 
             var sourceDorsal = Vector3.Transform(Vector3.UnitZ, sourcePalm);
             var targetDorsal = Vector3.Transform(Vector3.UnitZ, targetPalm);
+            float Length(SkeletonModel rig, HandRigDefinition hand)
+                => hand.UpperArm is int upper && hand.Forearm is int fore
+                    ? Vector3.Distance(rig.RestWorld[upper].Pos, rig.RestWorld[fore].Pos)
+                        + Vector3.Distance(rig.RestWorld[fore].Pos, rig.RestWorld[hand.Wrist].Pos)
+                    : hand.Digits.SelectMany(d => d.Segments.Take(1)).Select(b => Vector3.Distance(rig.RestWorld[b].Pos, rig.RestWorld[hand.Wrist].Pos)).DefaultIfEmpty(1).Average();
+            wristMotion.Add(new(sourceHand.Wrist, targetHand.Wrist, targetHand.UpperArm, targetHand.Forearm,
+                MathQ.Normalize(targetPalm * Quaternion.Conjugate(sourcePalm)), Length(target, targetHand) / MathF.Max(Length(source, sourceHand), 1e-5f), targetDorsal));
             var sourceArm = new[] { sourceHand.Clavicle, sourceHand.UpperArm, sourceHand.Forearm, sourceHand.Wrist };
             var targetArm = new[] { targetHand.Clavicle, targetHand.UpperArm, targetHand.Forearm, targetHand.Wrist };
             var previousSource = -1;
@@ -129,7 +143,26 @@ public sealed class HandRetargetProfile
         }
         if (matchedHands == 0) errors.Add(new("no-matching-hands", "Source and target have no matching hand side. Correct the mapping before retargeting."));
         if (errors.Count > 0) throw new RigValidationException(errors);
-        return new(source, target, pairs, distributions, notes);
+        HashSet<int> Protected(SkeletonModel rig,HandMappingResult mapping)
+        {
+            var result=mapping.Hands.SelectMany(h=>new int?[]{h.Wrist,h.Clavicle,h.UpperArm,h.Forearm}.Where(i=>i.HasValue).Select(i=>i!.Value).Concat(h.Digits.SelectMany(d=>d.Bones)).Concat(h.TwistOrHelperBones)).ToHashSet();
+            foreach(var bone in result.ToArray())for(var parent=rig[bone].ParentIndex;parent>=0;parent=rig[parent].ParentIndex)result.Add(parent);
+            return result;
+        }
+        var sourceProtected=Protected(source,sourceMap);var targetProtected=Protected(target,targetMap);
+        var preserved=new List<(int Source,int Target)>();
+        foreach(var bone in target.Bones.Where(b=>!targetProtected.Contains(b.Index)))
+        {
+            var index=source.IndexOf(bone.Name);
+            if(index<0||sourceProtected.Contains(index))continue;
+            var sourceParent=source[index].ParentIndex<0?null:source[source[index].ParentIndex].Name;
+            var targetParent=bone.ParentIndex<0?null:target[bone.ParentIndex].Name;
+            if(sourceParent!=targetParent || Vector3.Distance(source.RestWorld[index].Pos,target.RestWorld[bone.Index].Pos)>.01f
+                || MathQ.AngleBetween(source.RestWorld[index].Rot,target.RestWorld[bone.Index].Rot)>.001f)continue;
+            preserved.Add((index,bone.Index));
+        }
+        if(preserved.Count>0)notes.Add($"Preserved {preserved.Count} compatible non-hand tracks; target deformation helpers remain target-owned.");
+        return new(source, target, pairs, distributions, notes) { WristMotion = wristMotion.ToArray(), PreservedTracks=preserved.ToArray() };
 
         bool Palm(SkeletonModel skeleton, HandRigDefinition hand, IReadOnlyDictionary<HandSide, Quaternion>? overrides, string label, out Quaternion frame)
         {
@@ -179,5 +212,6 @@ public sealed class HandRetargetProfile
 }
 
 internal sealed record RotationPair(int Source, int Target, int SourceParent, int TargetParent, Quaternion SourceFrame, Quaternion TargetFrame);
+internal sealed record WristMotionPair(int Source, int Target, int? UpperArm, int? Forearm, Quaternion Basis, float Scale, Vector3 BendAxis);
 internal sealed record DigitDistribution(int SourceWrist, int TargetWrist, int[] Source, int[] Target,
     Quaternion[] SourceFrames, Quaternion[] TargetFrames, float[,] Weights, int ProximalSourceIndex);
