@@ -66,14 +66,14 @@ public static class HandRigValidator
                 var chain = digit.Bones.ToArray();
                 CheckChain(chain, hand.Side, key, allowZeroLength: false, tip: digit.Tip);
                 if (chain.Length > 0 && Valid(chain[0]) && Valid(hand.Wrist)
-                    && !DescendsFrom(chain[0], hand.Wrist))
+                    && !skeleton.DescendsFrom(chain[0], hand.Wrist))
                     issues.Add(new("wrong-wrist", $"{hand.Side} {key} must descend from its wrist.", hand.Side, chain[0]));
             }
             foreach (var helper in hand.TwistOrHelperBones)
             {
                 Claim(helper, hand.Side);
                 var armRoot = arm[0];
-                if (Valid(helper) && Valid(armRoot) && !DescendsFrom(helper, armRoot))
+                if (Valid(helper) && Valid(armRoot) && !skeleton.DescendsFrom(helper, armRoot))
                     issues.Add(new("wrong-helper-root", $"{hand.Side} helper must belong to its mapped arm or hand hierarchy.", hand.Side, helper));
             }
         }
@@ -89,19 +89,13 @@ public static class HandRigValidator
             else if (!claimed.Add(bone))
                 issues.Add(new("overlapping-bone", $"Bone '{skeleton[bone].Name}' is assigned to multiple roles.", side, bone));
         }
-        bool DescendsFrom(int child, int ancestor)
-        {
-            for (var parent = skeleton[child].ParentIndex; parent >= 0; parent = skeleton[parent].ParentIndex)
-                if (parent == ancestor) return true;
-            return false;
-        }
         void CheckChain(int[] bones, HandSide side, string role, bool allowZeroLength, int? tip = null)
         {
             for (var i = 0; i < bones.Length; i++)
             {
                 Claim(bones[i], side);
                 if (i == 0 || !Valid(bones[i - 1]) || !Valid(bones[i])) continue;
-                if (!DescendsFrom(bones[i], bones[i - 1]))
+                if (!skeleton.DescendsFrom(bones[i], bones[i - 1]))
                     issues.Add(new("chain-order", $"{side} {role} joints must follow their hierarchy.", side, bones[i]));
                 if (!allowZeroLength && bones[i] != tip &&
                     System.Numerics.Vector3.DistanceSquared(skeleton.RestWorld[bones[i - 1]].Pos,

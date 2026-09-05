@@ -1,4 +1,4 @@
-// Adapted from humanoid-retargeter 26084c96c3fc870aaf9a5bd798de063ce2fd62df; namespace only.
+// Adapted from humanoid-retargeter 26084c96c3fc870aaf9a5bd798de063ce2fd62df; cached hierarchy queries added.
 #nullable enable annotations
 
 using System;
@@ -54,12 +54,17 @@ public sealed class Skeleton
     private readonly Bone[] _bones;
     private readonly XForm[] _restWorld;
     private readonly Dictionary<string, int> _indexByName;
+    private readonly IReadOnlyList<int>[] _children;
 
     private Skeleton(Bone[] bones, XForm[] restWorld, Dictionary<string, int> indexByName)
     {
         _bones = bones;
         _restWorld = restWorld;
         _indexByName = indexByName;
+        var children = Enumerable.Range(0, bones.Length).Select(_ => new List<int>()).ToArray();
+        foreach (var bone in bones)
+            if (bone.ParentIndex >= 0) children[bone.ParentIndex].Add(bone.Index);
+        _children = children.Select(c => (IReadOnlyList<int>)c.AsReadOnly()).ToArray();
     }
 
     /// <summary>Number of bones.</summary>
@@ -79,6 +84,19 @@ public sealed class Skeleton
 
     /// <summary>Returns the index of the named bone, or -1 when absent.</summary>
     public int IndexOf(string name) => _indexByName.TryGetValue(name, out var index) ? index : -1;
+
+    /// <summary>Cached immediate children in stable skeleton order.</summary>
+    public IReadOnlyList<int> ChildrenOf(int bone) => _children[bone];
+
+    /// <summary>Whether child is strictly below ancestor; a bone is not its own descendant.</summary>
+    public bool DescendsFrom(int child, int ancestor)
+    {
+        if (child < 0 || child >= Count) throw new ArgumentOutOfRangeException(nameof(child));
+        if (ancestor < 0 || ancestor >= Count) throw new ArgumentOutOfRangeException(nameof(ancestor));
+        for (var parent = _bones[child].ParentIndex; parent >= 0; parent = _bones[parent].ParentIndex)
+            if (parent == ancestor) return true;
+        return false;
+    }
 
     /// <summary>
     /// Builds a skeleton from bone definitions in any order: validates names and parent links,
