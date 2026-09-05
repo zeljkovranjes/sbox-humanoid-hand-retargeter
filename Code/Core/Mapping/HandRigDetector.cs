@@ -15,7 +15,8 @@ public static class HandRigDetector
         IEnumerable<HandRigDefinition>? manualOverrides = null)
     {
         ArgumentNullException.ThrowIfNull(skeleton);
-        var names = skeleton.Bones.Select(b => new NameInfo(b.Name)).ToArray();
+        var hints = HandDetectionProfiles.Resolve(skeleton);
+        var names = skeleton.Bones.Select(b => new NameInfo(b.Name,hints[b.Index])).ToArray();
         var hands = new List<HandRigDefinition>();
         var candidates = new List<HandMappingCandidate>();
         var issues = new List<RigIssue>();
@@ -44,6 +45,9 @@ public static class HandRigDetector
             }
             var wrists = skeleton.Bones.Where(b => names[b.Index].IsWrist && !Blocked(b.Index)
                 && SideOf(b.Index) == side).Select(b => b.Index).ToArray();
+            var deformWrists=wrists.Where(w=>names[w].IsDeform).ToArray();
+            if(deformWrists.Length==1 && wrists.All(w=>names[w].FamilyKey==names[deformWrists[0]].FamilyKey))
+                wrists=deformWrists; // Rigify exports can contain DEF, ORG and animator-control copies.
             if (wrists.Length == 0) continue; // A one-sided rig is valid.
             if (wrists.Length > 1)
             {
@@ -53,7 +57,8 @@ public static class HandRigDetector
                 continue;
             }
             var selected = wrists[0];
-            Add(side, "Wrist", new[] { selected }, .95f, "Wrist name and side agree", true);
+            Add(side, "Wrist", new[] { selected }, .95f, names[selected].Profile is {} wristProfile
+                ? $"{wristProfile} profile and wrist hierarchy agree" : "Wrist name and side agree", true);
             var digits = new List<DigitChain>();
             var seenRoles = new HashSet<DigitRole>();
             foreach (var root in DigitRoots(selected))
@@ -101,7 +106,8 @@ public static class HandRigDetector
                 digits.Add(digit);
                 var confidence = role.HasValue ? .9f : .4f;
                 Add(side, role?.ToString() ?? "Extra:" + skeleton[root].Name, digit.Bones, confidence,
-                    role.HasValue ? "Named digit follows this wrist's hierarchy; segment numbering is not used for side"
+                    role.HasValue ? names[root].Profile is {} digitProfile ? $"{digitProfile} digit convention follows this wrist's hierarchy"
+                        : "Named digit follows this wrist's hierarchy; segment numbering is not used for side"
                         : "Unlabelled digit chain; assign an anatomical role or confirm an extra digit", true);
                 if (!role.HasValue) review = true;
             }
@@ -112,9 +118,11 @@ public static class HandRigDetector
             int? Find(params string[] aliases) => ancestors
                 .Where(b => !names[b].IsHelper && !Blocked(b) && aliases.Any(a => names[b].Core.EndsWith(a, StringComparison.Ordinal)))
                 .Select(b => (int?)b).FirstOrDefault();
-            var forearm = Find("forearm", "lowerarm", "armlower", "elbow");
-            var upperArm = Find("upperarm", "armupper", "uparm");
-            var clavicle = Find("clavicle", "collar");
+            int? ProfileJoint(string role)=>ancestors.Where(b=>names[b].ProfileRole==role && !names[b].IsHelper && !Blocked(b))
+                .Select(b=>(int?)b).FirstOrDefault();
+            var forearm = ProfileJoint("LowerArm") ?? Find("forearm", "lowerarm", "armlower", "elbow");
+            var upperArm = ProfileJoint("UpperArm") ?? Find("upperarm", "armupper", "uparm");
+            var clavicle = Find("clavicle", "collar") ?? ProfileJoint("Clavicle");
             // Prototype calls upper arm Shoulder, Mixamo calls clavicle Shoulder.
             if (upperArm is null && clavicle.HasValue) upperArm = Find("shoulder");
             upperArm ??= ancestors.Where(b => names[b].Core.EndsWith("arm", StringComparison.Ordinal)
@@ -203,12 +211,20 @@ public static class HandRigDetector
         public bool IsNonHandTrack { get; }
         public bool IsMeta { get; }
         public bool IsTip { get; }
+        public string? Profile { get; }
+        public string? ProfileRole { get; }
+        public bool IsDeform { get; }
+        public string FamilyKey { get; }
 
-        public NameInfo(string name)
+        public NameInfo(string name,HandDetectionProfiles.Hint? hint)
         {
             var stripped = name[(name.LastIndexOf(':') + 1)..];
             var hash = stripped.LastIndexOf('#');
             if (hash >= 0 && stripped[(hash + 1)..].All(char.IsDigit)) stripped = stripped[..hash];
+            IsDeform=stripped.StartsWith("DEF-",StringComparison.OrdinalIgnoreCase);
+            FamilyKey=HandDetectionProfiles.Key(IsDeform||stripped.StartsWith("ORG-",StringComparison.OrdinalIgnoreCase)
+                ||stripped.StartsWith("MCH-",StringComparison.OrdinalIgnoreCase)?stripped[4..]:stripped);
+            Profile=hint?.Profile;ProfileRole=hint?.Role;
             var tokens = BoneNameTokens.Tokenize(stripped);
             bool Has(params string[] words) => tokens.Any(t => words.Contains(t, StringComparer.Ordinal));
             var left = Has("l", "left", "lft");
@@ -223,22 +239,25 @@ public static class HandRigDetector
                     || compact.EndsWith(joint + "r", StringComparison.Ordinal) || compact == "r" + joint;
             }
             ConflictingSides = left && right;
-            Side = left == right ? null : left ? HandSide.Left : HandSide.Right;
+            Side = left == right ? left ? null : hint?.Side : left ? HandSide.Left : HandSide.Right;
             Core = string.Concat(tokens.Where(t => !new[] { "l", "left", "lft", "r", "right", "rgt", "def", "org", "mch", "stretch" }.Contains(t)
                 && !t.All(char.IsDigit)));
             IsHelper = Has("twist", "twistctrl", "roll", "share", "sharebone", "helper", "hlp", "corrective", "control", "ctrl");
             IsNonHandTrack = Has("weapon", "camera", "ik", "ikrule", "hold", "socket", "attachment", "magazine", "bolt", "slide", "trigger")
                 || compact.StartsWith("weapon", StringComparison.Ordinal) || compact.StartsWith("camera", StringComparison.Ordinal);
-            IsMeta = Has("meta", "metacarpal", "carpal");
-            IsTip = Has("tip", "end", "nub", "endmarker");
+            IsMeta = Has("meta", "metacarpal", "carpal", "palm") || hint?.Role.EndsWith("Meta",StringComparison.Ordinal)==true;
+            IsTip = Has("tip", "end", "nub", "endmarker") || hint?.Role.EndsWith("Tip",StringComparison.Ordinal)==true;
             bool DigitName(params string[] aliases) => Has(aliases)
                 || aliases.Any(a => Core.EndsWith(a, StringComparison.Ordinal) || Core.EndsWith(a + "finger", StringComparison.Ordinal));
             Digit = DigitName("thumb") ? DigitRole.Thumb : DigitName("index", "forefinger") ? DigitRole.Index
                 : DigitName("middle", "mid") ? DigitRole.Middle : DigitName("ring") ? DigitRole.Ring
                 : DigitName("pinky", "pinkie", "little") ? DigitRole.Pinky : null;
+            if(hint is not null && HandDetectionProfiles.IsDigit(hint.Role))
+                Digit=Enum.GetValues<DigitRole>().First(d=>hint.Role.StartsWith(d.ToString(),StringComparison.Ordinal));
             IsWrist = !IsHelper && !IsNonHandTrack && !IsTip && Digit is null
                 && new[] { "hand", "wrist", "handl", "handr", "wristl", "wristr", "handleft", "handright", "wristleft", "wristright" }
                     .Any(suffix => Core.EndsWith(suffix, StringComparison.Ordinal));
+            if(hint?.Role=="Hand"&&!IsHelper&&!IsNonHandTrack&&!IsTip)IsWrist=true;
         }
     }
 }
