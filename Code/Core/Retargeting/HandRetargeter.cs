@@ -60,9 +60,29 @@ public static class HandRetargeter
             var travel = Vector3.Transform(sourceWorld[pair.Source].Pos - profile.Source.RestWorld[pair.Source].Pos, options.WristTravelBasis ?? pair.Basis);
             var desired = profile.Target.RestWorld[pair.Target].Pos + travel * (options.ScaleWristTravel ? pair.Scale : 1f);
             var wristRotation = world[pair.Target].Rot;
+            if(options.WeaponSpaceOffset is {} weaponOffset)
+            {
+                wristRotation=MathQ.Normalize(sourceWorld[pair.Source].Rot*pair.GripRotationOffset);
+                desired=sourceWorld[pair.Source].Pos+weaponOffset
+                    +Vector3.Transform(pair.SourceGripLocal,sourceWorld[pair.Source].Rot)
+                    -Vector3.Transform(pair.TargetGripLocal,wristRotation);
+            }
             if (options.SolveArmIk && pair.UpperArm is int upper && pair.Forearm is int lower)
             {
-                if (Vector3.DistanceSquared(world[pair.Target].Pos, desired) < 1e-8f) continue;
+                if(options.WeaponSpaceOffset.HasValue)
+                {
+                    // FPS arm meshes have free shoulder ends. Move the shoulder enough
+                    // to reach the fixed weapon grip instead of stretching either arm segment.
+                    var reach=Vector3.Distance(world[upper].Pos,world[lower].Pos)+Vector3.Distance(world[lower].Pos,world[pair.Target].Pos);
+                    var toGrip=desired-world[upper].Pos;var distance=toGrip.Length();
+                    if(distance>reach*.98f&&distance>1e-5f)
+                    {
+                        var shoulder=world[upper].Pos+toGrip/distance*(distance-reach*.98f);
+                        var parent=profile.Target[upper].ParentIndex;
+                        target.Locals[upper].Pos=parent<0?shoulder:Vector3.Transform(shoulder-world[parent].Pos,Quaternion.Conjugate(world[parent].Rot));
+                        world=target.ToWorld(profile.Target);
+                    }
+                }
                 var correction = TwoBoneIk.Solve(world[upper].Pos, world[lower].Pos, world[pair.Target].Pos, desired, 0, pair.BendAxis);
                 void SetWorldRotation(int bone, Quaternion rotation)
                 {
@@ -74,6 +94,8 @@ public static class HandRetargeter
                 SetWorldRotation(upper, correction.UpperWorldDelta * world[upper].Rot);
                 SetWorldRotation(lower, correction.LowerWorldDelta * oldLower);
                 SetWorldRotation(pair.Target, wristRotation);
+                if(options.WeaponSpaceOffset.HasValue&&Vector3.Distance(world[pair.Target].Pos,desired)>.1f)
+                    throw new InvalidOperationException("The target arm cannot reach the weapon grip without stretching. Adjust the rig's shoulder placement or disable Preserve weapon grip.");
             }
             else
             {
@@ -82,6 +104,7 @@ public static class HandRetargeter
                 var parent = profile.Target[pair.Target].ParentIndex;
                 target.Locals[pair.Target].Pos = parent < 0 ? desired
                     : Vector3.Transform(desired - world[parent].Pos, Quaternion.Conjugate(world[parent].Rot));
+                target.Locals[pair.Target].Rot=MathQ.Normalize(parent<0?wristRotation:Quaternion.Conjugate(world[parent].Rot)*wristRotation);
             }
         }
         var errors = PoseValidator.Validate(profile.Target, target);

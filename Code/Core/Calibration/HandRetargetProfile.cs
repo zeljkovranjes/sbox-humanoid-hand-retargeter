@@ -75,8 +75,17 @@ public sealed class HandRetargetProfile
                     ? Vector3.Distance(rig.RestWorld[upper].Pos, rig.RestWorld[fore].Pos)
                         + Vector3.Distance(rig.RestWorld[fore].Pos, rig.RestWorld[hand.Wrist].Pos)
                     : hand.Digits.SelectMany(d => d.Segments.Take(1)).Select(b => Vector3.Distance(rig.RestWorld[b].Pos, rig.RestWorld[hand.Wrist].Pos)).DefaultIfEmpty(1).Average();
+            Vector3 GripLocal(SkeletonModel rig,HandRigDefinition hand)
+            {
+                var digits=hand.Digits.Where(d=>d.Role!=DigitRole.Thumb).ToArray();
+                if(digits.Length==0)return Vector3.Zero;
+                var knuckles=digits.Aggregate(Vector3.Zero,(sum,d)=>sum+rig.RestWorld[d.Segments[0]].Pos)/digits.Length;
+                return Vector3.Transform((knuckles-rig.RestWorld[hand.Wrist].Pos)*.5f,Quaternion.Conjugate(rig.RestWorld[hand.Wrist].Rot));
+            }
             wristMotion.Add(new(sourceHand.Wrist, targetHand.Wrist, targetHand.UpperArm, targetHand.Forearm,
-                MathQ.Normalize(targetPalm * Quaternion.Conjugate(sourcePalm)), Length(target, targetHand) / MathF.Max(Length(source, sourceHand), 1e-5f), targetDorsal));
+                MathQ.Normalize(targetPalm * Quaternion.Conjugate(sourcePalm)), Length(target, targetHand) / MathF.Max(Length(source, sourceHand), 1e-5f), targetDorsal,
+                MathQ.Normalize(Quaternion.Conjugate(source.RestWorld[sourceHand.Wrist].Rot)*sourcePalm*Quaternion.Conjugate(targetPalm)*target.RestWorld[targetHand.Wrist].Rot),
+                GripLocal(source,sourceHand),GripLocal(target,targetHand)));
             var sourceArm = new[] { sourceHand.Clavicle, sourceHand.UpperArm, sourceHand.Forearm, sourceHand.Wrist };
             var targetArm = new[] { targetHand.Clavicle, targetHand.UpperArm, targetHand.Forearm, targetHand.Wrist };
             var previousSource = -1;
@@ -212,6 +221,7 @@ public sealed class HandRetargetProfile
 }
 
 internal sealed record RotationPair(int Source, int Target, int SourceParent, int TargetParent, Quaternion SourceFrame, Quaternion TargetFrame);
-internal sealed record WristMotionPair(int Source, int Target, int? UpperArm, int? Forearm, Quaternion Basis, float Scale, Vector3 BendAxis);
+internal sealed record WristMotionPair(int Source, int Target, int? UpperArm, int? Forearm, Quaternion Basis, float Scale, Vector3 BendAxis,
+    Quaternion GripRotationOffset,Vector3 SourceGripLocal,Vector3 TargetGripLocal);
 internal sealed record DigitDistribution(int SourceWrist, int TargetWrist, int[] Source, int[] Target,
     Quaternion[] SourceFrames, Quaternion[] TargetFrames, float[,] Weights, int ProximalSourceIndex);

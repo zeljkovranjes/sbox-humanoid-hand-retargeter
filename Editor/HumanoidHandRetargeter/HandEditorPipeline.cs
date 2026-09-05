@@ -42,7 +42,7 @@ public sealed class HandTarget
 
 public sealed record HandExportResult(string ModelPath,IReadOnlyList<string> Changes,string? BackupPath);
 
-public sealed record HandBakedClip(HandSource Source, Clip Original, Clip Baked, IReadOnlyList<string> Notes);
+public sealed record HandBakedClip(HandSource Source, Clip Original, Clip Baked, IReadOnlyList<string> Notes,Vec? WeaponOffset=null);
 
 /// <summary>Editor adapter over the pure importer, shared bake and transactional setup.
 /// Engine calls use the same main-thread dispatch convention as the audited EditorPipeline.</summary>
@@ -118,9 +118,15 @@ public static class HandEditorPipeline
         profile ??= Calibrate(source,target);
         // Compiled s&box models already share X-forward/Z-up coordinates. A wrist's
         // bind rotation must not turn vertical reload travel into sideways/downward motion.
-        if(source.ModelPath is not null && options.WristTravelBasis is null)
-            options=new HandMotionOptions{TransferWristPosition=options.TransferWristPosition,ScaleWristTravel=options.ScaleWristTravel,SolveArmIk=options.SolveArmIk,WristTravelBasis=Quat.Identity};
-        return new(source,clip,HandRetargeter.Bake(profile,clip,options,cancel),profile.Notes);
+        var weaponOffset=options.WeaponSpaceOffset;
+        if(source.ModelPath is not null&&options.PreserveWeaponGrip&&options.TransferWristPosition
+            &&source.Scene.Skeleton.Bones.Any(b=>b.Name.Equals("weapon_root",StringComparison.OrdinalIgnoreCase)))
+            weaponOffset ??= HandViewSpace.EyePosition(target.Skeleton,target.Mapping)-HandViewSpace.EyePosition(source.Scene.Skeleton,source.Mapping);
+        options=new HandMotionOptions{TransferWristPosition=options.TransferWristPosition,ScaleWristTravel=options.ScaleWristTravel,
+            SolveArmIk=options.SolveArmIk,PreserveWeaponGrip=options.PreserveWeaponGrip,WeaponSpaceOffset=weaponOffset,
+            WristTravelBasis=options.WristTravelBasis??(source.ModelPath is not null?Quat.Identity:null)};
+        var notes=weaponOffset.HasValue?profile.Notes.Concat(new[]{"Preserved both palm grip anchors in one fixed weapon space; weapon motion is not scaled per arm."}).ToArray():profile.Notes;
+        return new(source,clip,HandRetargeter.Bake(profile,clip,options,cancel),notes,weaponOffset);
     }
 
     public static async Task<string> ExportAsync(HandTarget target,IReadOnlyList<HandBakedClip> clips,string outputModel,

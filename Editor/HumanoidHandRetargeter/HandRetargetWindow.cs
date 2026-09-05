@@ -20,7 +20,7 @@ public sealed class HandRetargetWindow : Widget
     static HandRetargetWindow? instance;
     readonly List<Row> rows=new();readonly Layout list;readonly Label status;readonly Label report;
     readonly Button convert,add,details;readonly ComboBox targets;readonly Widget options;
-    readonly Checkbox graph,backup,ik,travel,scale,companion,weapon;
+    readonly Checkbox graph,backup,ik,travel,scale,companion,weapon,grip;
     readonly LineEdit output,fps;bool busy;CancellationTokenSource? cancellation;
     public HandTarget? Target {get;private set;}
     public IReadOnlyList<HandBakedClip> LastBake {get;private set;}=Array.Empty<HandBakedClip>();
@@ -52,12 +52,13 @@ public sealed class HandRetargetWindow : Widget
         companion=a.Add(new Checkbox("Preserve source tracks"){Value=true});companion.ToolTip="Also export the original hierarchy and animation as a companion DMX, preserving weapon, camera and IK tracks.";
         var b=options.Layout.AddColumn();b.Spacing=6;
         ik=b.Add(new Checkbox("Arm effector IK"){Value=true});travel=b.Add(new Checkbox("Transfer wrist travel"){Value=true});scale=b.Add(new Checkbox("Scale wrist travel to target"){Value=true});
+        grip=b.Add(new Checkbox("Preserve weapon grip"){Value=true});grip.ToolTip="For weapon model sources, keep both palm anchors on the authored weapon motion. Per-arm travel scaling is bypassed.";
         b.Add(new Button("Target Mapping…","device_hub"){Clicked=MapTarget});
         var select=b.AddRow();select.Add(new Button("Select all"){Clicked=()=>{foreach(var row in rows)row.Selected=true;Refresh();}});select.Add(new Button("Select none"){Clicked=()=>{foreach(var row in rows)row.Selected=false;Refresh();}});
         var c=options.Layout.AddColumn();c.Spacing=6;
         c.Add(new Label(this){Text="Output model:"});output=c.Add(new LineEdit(this){Text="models/hand_retargeter/retargeted_hands.vmdl",MinimumWidth=200});
         var sample=c.AddRow();sample.Spacing=8;sample.Add(new Label(this){Text="Sample fps:"});fps=sample.Add(new LineEdit(this){Text="30",FixedWidth=52});
-        foreach(var check in new[]{ik,travel,scale})check.Clicked=()=>LastBake=Array.Empty<HandBakedClip>();
+        foreach(var check in new[]{ik,travel,scale,grip})check.Clicked=()=>LastBake=Array.Empty<HandBakedClip>();
         report=Layout.Add(new Label(this){WordWrap=true,Visible=false});report.SetStyles("margin: 8px;");
         var bottom=Layout.AddRow();bottom.Margin=new Sandbox.UI.Margin(8,4,8,6);bottom.Spacing=8;
         status=bottom.Add(new Label(this){Text="Select source animations and a target hand model."},1);
@@ -127,7 +128,7 @@ public sealed class HandRetargetWindow : Widget
         report.Visible=false;details.Text="Show details";details.Visible=true;
     }
     void ToggleDetails(){report.Visible=!report.Visible;details.Text=report.Visible?"Hide details":"Show details";}
-    HandMotionOptions MotionOptions()=>new(){SolveArmIk=ik.Value,TransferWristPosition=travel.Value,ScaleWristTravel=scale.Value};
+    HandMotionOptions MotionOptions()=>new(){SolveArmIk=ik.Value,TransferWristPosition=travel.Value,ScaleWristTravel=scale.Value,PreserveWeaponGrip=grip.Value};
     async Task Run(Func<CancellationToken,Task> work)
     {
         if(busy)return;busy=true;cancellation=new();report.Visible=false;details.Visible=false;Refresh();

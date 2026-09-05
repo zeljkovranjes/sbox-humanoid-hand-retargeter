@@ -64,29 +64,7 @@ public sealed class HandPreviewWidget : SceneRenderingWidget
         }
         ApplyCurrentFrame();FrameChanged?.Invoke(0);}
     Vector3 FindEyePosition()
-    {
-        Vector3 Rest(int bone)=>HandEditorPipeline.ToEngine(target.Skeleton.RestWorld[bone]).Position;
-        var cameraBone=target.Skeleton.Bones.FirstOrDefault(b=>IsCamera(b.Name));
-        if(cameraBone.Name is not null)return Rest(cameraBone.Index);
-        var eyes=target.Skeleton.Bones.FirstOrDefault(b=>b.Name.Equals("eyes",StringComparison.OrdinalIgnoreCase));
-        if(eyes.Name is not null)return Rest(eyes.Index);
-        var head=target.Skeleton.Bones.FirstOrDefault(b=>b.Name.Equals("head",StringComparison.OrdinalIgnoreCase));
-        if(head.Name is not null)return Rest(head.Index)+Vector3.Up*3;
-        var arms=target.Mapping.Hands.Where(h=>h.UpperArm.HasValue).ToArray();
-        if(arms.Length>0)
-        {
-            var shoulders=arms.Select(h=>Rest(h.UpperArm!.Value)).ToArray();
-            var center=shoulders.Aggregate(Vector3.Zero,(sum,p)=>sum+p)/shoulders.Length;
-            var length=arms.Average(h=>Rest(h.UpperArm!.Value).Distance(Rest(h.Wrist)));
-            return center+Vector3.Up*(length*.3f)-Vector3.Forward*(length*.05f);
-        }
-        // Hand-only rigs have no eye/shoulder reference. Use the initial wrists,
-        // not the entire animation's bounds, so a wide reload cannot pull the camera away.
-        var pose=clip is null?target.Skeleton.RestWorld:new Pose(clip.Baked.Frames[0]).ToWorld(target.Skeleton);
-        var wrists=target.Mapping.Hands.Select(h=>HandEditorPipeline.ToEngine(pose[h.Wrist]).Position).ToArray();
-        return (wrists.Length==0?Vector3.Zero:wrists.Aggregate(Vector3.Zero,(sum,p)=>sum+p)/wrists.Length)
-            -Vector3.Forward*12+Vector3.Up*4;
-    }
+        =>HandEditorPipeline.ToEngine(new XForm(HumanoidHandRetargeter.Calibration.HandViewSpace.EyePosition(target.Skeleton,target.Mapping),Quat.Identity)).Position;
     public void Scrub(int frame){Playing=false;if(clip is not null)seconds=Math.Clamp(frame,0,FrameCount-1)/clip.Baked.Fps;ApplyCurrentFrame();FrameChanged?.Invoke(CurrentFrame);}
     public void ResetCamera(){yaw=140;pitch=20;zoom=1;FpsOffset=Vector3.Zero;FpsAngles=default;ApplyCurrentFrame();}
     public void SetWeapon(string path)
@@ -132,6 +110,7 @@ public sealed class HandPreviewWidget : SceneRenderingWidget
             var sourcePoints=sourceWorld.Select(w=>SourceTransform(w).Position).ToArray();
             var offsets=target.Mapping.Hands.Select(h=>new {Target=h,Source=clip.Source.Mapping.Hands.FirstOrDefault(s=>s.Side==h.Side)}).Where(h=>h.Source is not null).Select(h=>points[h.Target.Wrist]-sourcePoints[h.Source!.Wrist]).ToArray();
             var contextOffset=offsets.Length==0?Vector3.Zero:offsets.Aggregate(Vector3.Zero,(sum,v)=>sum+v)/offsets.Length;
+            if(clip.WeaponOffset is {} fixedOffset)contextOffset=HandEditorPipeline.ToEngine(new XForm(fixedOffset,Quat.Identity)).Position;
             Draw(ghostLines,sourcePoints,clip.Source.Scene.Skeleton.Bones.Select(b=>b.ParentIndex).ToArray(),new Color(1,.65f,.1f,.7f),ShowSource);
             var cameraBone=clip.Source.Scene.Skeleton.Bones.FirstOrDefault(b=>IsCamera(b.Name));
             if(HasAuthoredCamera){camera=SourceTransform(sourceWorld[cameraBone.Index]);cameraRest=SourceTransform(clip.Source.Scene.Skeleton.RestWorld[cameraBone.Index]);}
