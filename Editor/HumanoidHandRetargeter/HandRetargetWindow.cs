@@ -19,7 +19,7 @@ public sealed class HandRetargetWindow : Widget
     public const string DockTitle="Humanoid Hand Retargeter";
     static HandRetargetWindow? instance;
     readonly List<Row> rows=new();readonly Layout list;readonly Label status;readonly Label report;
-    readonly Button convert,add;readonly ComboBox targets;readonly Widget options;
+    readonly Button convert,add,details;readonly ComboBox targets;readonly Widget options;
     readonly Checkbox graph,backup,ik,travel,scale,companion,weapon;
     readonly LineEdit output,fps;bool busy;CancellationTokenSource? cancellation;
     public HandTarget? Target {get;private set;}
@@ -61,6 +61,7 @@ public sealed class HandRetargetWindow : Widget
         report=Layout.Add(new Label(this){WordWrap=true,Visible=false});report.SetStyles("margin: 8px;");
         var bottom=Layout.AddRow();bottom.Margin=new Sandbox.UI.Margin(8,4,8,6);bottom.Spacing=8;
         status=bottom.Add(new Label(this){Text="Select source animations and a target hand model."},1);
+        details=bottom.Add(new Button("Show details"){Visible=false,Clicked=ToggleDetails});
         bottom.Add(new Button("Cancel"){Clicked=()=>cancellation?.Cancel()});
         _=SelectTargetAsync(HandEditorPipeline.HumanArms);
     }
@@ -122,15 +123,17 @@ public sealed class HandRetargetWindow : Widget
         status.Text="Writing and compiling animations…";
         var result=await HandEditorPipeline.ExportWithReportAsync(target,clips,output.Text,graph.Value,backup.Value,weapon.Value,companion.Value,token);
         await HandEditorPipeline.MainThread();status.Text=$"Done: {clips.Count} clip(s) → {result.ModelPath}";
-        report.Text=string.Join("\n",result.Changes.Concat(clips.SelectMany(c=>c.Notes)).Distinct())+(result.BackupPath is null?"":"\nBackup: "+result.BackupPath)+(companion.Value?"\nOriginal weapon/camera/IK tracks saved in the source_tracks folder.":"");report.Visible=true;
+        report.Text=string.Join("\n",result.Changes.Concat(clips.SelectMany(c=>c.Notes)).Distinct())+(result.BackupPath is null?"":"\nBackup: "+result.BackupPath)+(companion.Value?"\nOriginal weapon/camera/IK tracks saved in the source_tracks folder.":"");
+        report.Visible=false;details.Text="Show details";details.Visible=true;
     }
+    void ToggleDetails(){report.Visible=!report.Visible;details.Text=report.Visible?"Hide details":"Show details";}
     HandMotionOptions MotionOptions()=>new(){SolveArmIk=ik.Value,TransferWristPosition=travel.Value,ScaleWristTravel=scale.Value};
     async Task Run(Func<CancellationToken,Task> work)
     {
-        if(busy)return;busy=true;cancellation=new();Refresh();
+        if(busy)return;busy=true;cancellation=new();report.Visible=false;details.Visible=false;Refresh();
         try{await work(cancellation.Token);}
         catch(OperationCanceledException){await HandEditorPipeline.MainThread();status.Text="Cancelled.";}
-        catch(Exception error){await HandEditorPipeline.MainThread();status.Text=error.Message;report.Text=error.Message;report.Visible=true;}
+        catch(Exception error){await HandEditorPipeline.MainThread();status.Text="Action could not be completed.";report.Text=error.Message;report.Visible=true;}
         finally{await HandEditorPipeline.MainThread();busy=false;cancellation.Dispose();cancellation=null;if(IsValid)Refresh();}
     }
     void Refresh()

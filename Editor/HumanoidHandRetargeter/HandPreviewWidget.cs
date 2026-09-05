@@ -20,7 +20,7 @@ public sealed class HandPreviewWidget : SceneRenderingWidget
     readonly HandTarget target; readonly SceneModel model; readonly int[] modelBones; readonly Transform[] bind;
     readonly List<SceneLineObject> skeletonLines=new(),ghostLines=new(); readonly int[] framingBones;
     HandBakedClip? clip; SceneModel? weapon; HandPreviewMode mode;
-    Vector3 fpsCenter;float fpsRadius=8;
+    Vector3 fpsEye;Rotation fpsLook=Rotation.Identity;
     float seconds,yaw=140,pitch=20,zoom=1; Vector2 mouse;
     public bool Playing {get;set;}=true;
     public bool SkeletonOnly {get;set;}
@@ -50,14 +50,43 @@ public sealed class HandPreviewWidget : SceneRenderingWidget
         framingBones=target.Mapping.Hands.SelectMany(h=>new int?[]{h.Clavicle,h.UpperArm,h.Forearm,h.Wrist}.Where(b=>b.HasValue).Select(b=>b!.Value).Concat(h.Digits.SelectMany(d=>d.Bones))).Distinct().ToArray();
         ApplyCurrentFrame();
     }
-    public void SetClip(HandBakedClip value){clip=value;seconds=0;
-        var indices=target.Mapping.Hands.SelectMany(h=>new[]{h.Wrist}.Concat(h.Digits.SelectMany(d=>d.Bones))).Distinct().ToArray();
-        var points=new List<Vector3>();
-        for(var frame=0;frame<value.Baked.FrameCount;frame+=Math.Max(1,value.Baked.FrameCount/60)){
-            var pose=new Pose(value.Baked.Frames[frame]).ToWorld(target.Skeleton);points.AddRange(indices.Select(i=>HandEditorPipeline.ToEngine(pose[i]).Position));
+    public void SetClip(HandBakedClip value){clip=value;seconds=0;fpsEye=FindEyePosition();fpsLook=Rotation.Identity;
+        if(!HasAuthoredCamera){
+            var wrists=target.Mapping.Hands.Select(h=>h.Wrist).ToArray();
+            var focus=Vector3.Zero;var count=0;
+            for(var frame=0;frame<value.Baked.FrameCount;frame+=Math.Max(1,value.Baked.FrameCount/60)){
+                var world=new Pose(value.Baked.Frames[frame]).ToWorld(target.Skeleton);
+                foreach(var wrist in wrists){focus+=HandEditorPipeline.ToEngine(world[wrist]).Position;count++;}
+            }
+            // Body animations have no authored view direction. Look toward the hand
+            // action from the eyes without moving away to fit the arms on screen.
+            if(count>0&&(focus/count-fpsEye).Length>.01f)fpsLook=Rotation.LookAt(focus/count-fpsEye,Vector3.Up);
         }
-        if(points.Count>0){var bounds=new BBox(points[0],points[0]);foreach(var point in points)bounds=bounds.AddPoint(point);fpsCenter=bounds.Center;fpsRadius=MathF.Max(4,points.Max(p=>p.Distance(fpsCenter)));}
         ApplyCurrentFrame();FrameChanged?.Invoke(0);}
+    Vector3 FindEyePosition()
+    {
+        Vector3 Rest(int bone)=>HandEditorPipeline.ToEngine(target.Skeleton.RestWorld[bone]).Position;
+        var cameraBone=target.Skeleton.Bones.FirstOrDefault(b=>IsCamera(b.Name));
+        if(cameraBone.Name is not null)return Rest(cameraBone.Index);
+        var eyes=target.Skeleton.Bones.FirstOrDefault(b=>b.Name.Equals("eyes",StringComparison.OrdinalIgnoreCase));
+        if(eyes.Name is not null)return Rest(eyes.Index);
+        var head=target.Skeleton.Bones.FirstOrDefault(b=>b.Name.Equals("head",StringComparison.OrdinalIgnoreCase));
+        if(head.Name is not null)return Rest(head.Index)+Vector3.Up*3;
+        var arms=target.Mapping.Hands.Where(h=>h.UpperArm.HasValue).ToArray();
+        if(arms.Length>0)
+        {
+            var shoulders=arms.Select(h=>Rest(h.UpperArm!.Value)).ToArray();
+            var center=shoulders.Aggregate(Vector3.Zero,(sum,p)=>sum+p)/shoulders.Length;
+            var length=arms.Average(h=>Rest(h.UpperArm!.Value).Distance(Rest(h.Wrist)));
+            return center+Vector3.Up*(length*.3f)-Vector3.Forward*(length*.05f);
+        }
+        // Hand-only rigs have no eye/shoulder reference. Use the initial wrists,
+        // not the entire animation's bounds, so a wide reload cannot pull the camera away.
+        var pose=clip is null?target.Skeleton.RestWorld:new Pose(clip.Baked.Frames[0]).ToWorld(target.Skeleton);
+        var wrists=target.Mapping.Hands.Select(h=>HandEditorPipeline.ToEngine(pose[h.Wrist]).Position).ToArray();
+        return (wrists.Length==0?Vector3.Zero:wrists.Aggregate(Vector3.Zero,(sum,p)=>sum+p)/wrists.Length)
+            -Vector3.Forward*12+Vector3.Up*4;
+    }
     public void Scrub(int frame){Playing=false;if(clip is not null)seconds=Math.Clamp(frame,0,FrameCount-1)/clip.Baked.Fps;ApplyCurrentFrame();FrameChanged?.Invoke(CurrentFrame);}
     public void ResetCamera(){yaw=140;pitch=20;zoom=1;FpsOffset=Vector3.Zero;FpsAngles=default;ApplyCurrentFrame();}
     public void SetWeapon(string path)
@@ -115,9 +144,8 @@ public sealed class HandPreviewWidget : SceneRenderingWidget
         if(Mode==HandPreviewMode.Fps)
         {
             Camera.FieldOfView=Math.Clamp(FpsFov,35,120);
-            var center=clip is null?restBounds.Center:fpsCenter;
-            var fallback=center-Vector3.Forward*MathX.SphereCameraDistance(clip is null?radius:fpsRadius,Camera.FieldOfView)+Vector3.Up*4;
-            var basis=new Transform(fallback,Rotation.LookAt(Vector3.Forward,Vector3.Up));
+            var fallback=clip is null?FindEyePosition():fpsEye;
+            var basis=new Transform(fallback,fpsLook);
             // Rebase authored camera motion onto the target framing. Absolute source
             // camera coordinates belong to a different rest pose and can face away from custom arms.
             if(camera is { } authored && cameraRest is { } origin && UseAuthoredCamera)
