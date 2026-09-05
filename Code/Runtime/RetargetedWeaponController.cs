@@ -20,6 +20,8 @@ public sealed class RetargetedWeaponController : Component
     [Property] public float HipFov { get; set; } = 75;
     [Property] public float AimFov { get; set; } = 55;
     [Property] public string WorldGripBone { get; set; } = "hand_R";
+    [Property] public int BodyHoldType { get; set; } = 2;
+    [Property] public int BodyHandedness { get; set; }
     public int Ammo => magazine?.Rounds ?? MagazineSize;
     public int Reserve => magazine?.Reserve ?? StartingReserve;
     public bool Reloading => magazine?.Reloading ?? false;
@@ -46,6 +48,8 @@ public sealed class RetargetedWeaponController : Component
         nextShot=Time.Now+60/Math.Max(1,RoundsPerMinute);
         if(!magazine.TryFire()){weapon.DryFire();return false;}
         weapon.Attack();weapon.SetEmpty(Ammo==0);ShotsFired++;
+        UpdateBodyPose();
+        Player.Renderer?.Set("b_attack",true);
         var eye=Player.EyeTransform;
         var hit=Scene.Trace.Ray(eye.Position,eye.Position+eye.Rotation.Forward*Range)
             .IgnoreGameObjectHierarchy(Player.GameObject).IgnoreGameObjectHierarchy(GameObject).UseHitboxes().Run();
@@ -63,6 +67,8 @@ public sealed class RetargetedWeaponController : Component
     {
         if(magazine is null||weapon is null||!magazine.BeginReload())return false;
         weapon.Reload(Ammo==0);reloadEnds=Time.Now+(Ammo==0?EmptyReloadSeconds:ReloadSeconds);
+        UpdateBodyPose();
+        Player?.Renderer?.Set("b_reload",true);
         return true;
     }
     public void Aim(bool value){Aiming=value&&!Reloading;if(weapon is not null)weapon.Aiming=Aiming;}
@@ -85,12 +91,17 @@ public sealed class RetargetedWeaponController : Component
         }
         weapon.ShowHands=!Player.ThirdPerson;
         weapon.WorldTransform=Player.EyeTransform;
-        if(Player.ThirdPerson&&Player.Renderer is {} body)
-        {
-            body.Set("holdtype",2);body.Set("aim_body_weight",1f);
-            if(body.TryGetBoneTransform(WorldGripBone,out var hand)&&weapon.SourceBone(WorldGripBone) is {} grip)
-                weapon.WorldTransform=hand.ToWorld(grip.ToLocal(global::Transform.Zero));
-        }
+        // Keep the body graph warm even when hidden, so a camera switch during a shot
+        // or reload reveals the same action rather than restarting a holding pose.
+        UpdateBodyPose();
+        weapon.ThirdPersonBody=Player.ThirdPerson?Player.Renderer:null;
+        weapon.WorldGripBone=WorldGripBone;
+    }
+    private void UpdateBodyPose()
+    {
+        if(Player?.Renderer is not {} body)return;
+        body.Set("holdtype",BodyHoldType);body.Set("holdtype_handedness",BodyHandedness);
+        body.Set("aim_body_weight",1f);
     }
     protected override void OnPreRender()
     {
@@ -100,5 +111,10 @@ public sealed class RetargetedWeaponController : Component
             camera.FieldOfView=currentFov;
         }
     }
-    protected override void OnDisabled(){magazine?.CancelReload();Aiming=false;if(weapon is not null)weapon.Aiming=false;}
+    protected override void OnDisabled()
+    {
+        magazine?.CancelReload();Aiming=false;
+        if(weapon is not null){weapon.Aiming=false;weapon.ThirdPersonBody=null;}
+        Player?.Renderer?.Set("holdtype",0);
+    }
 }

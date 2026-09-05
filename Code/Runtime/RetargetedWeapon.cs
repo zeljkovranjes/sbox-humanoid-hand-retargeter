@@ -20,6 +20,8 @@ public sealed class RetargetedWeapon : Component
     [Property, TextArea] public string LiveCalibration { get; set; } = "";
     [Property] public bool Visible { get; set; } = true;
     [Property] public bool ShowHands { get; set; } = true;
+    public SkinnedModelRenderer? ThirdPersonBody { get; set; }
+    public string WorldGripBone { get; set; } = "hand_R";
     [Property] public bool Aiming { get; set; }
     [Property] public bool Sprinting { get; set; }
     [Property] public float Movement { get; set; }
@@ -97,6 +99,10 @@ public sealed class RetargetedWeapon : Component
         }
         weapon!.Transform=hands!.Transform=WorldTransform;
         weapon.RenderingEnabled=Visible;hands.RenderingEnabled=Visible&&ShowHands;
+        // The camera-space meshes must not cast a detached pair of arms onto the world.
+        // In third person the body supplies the arm shadow and the held gun casts its own.
+        hands.Flags.CastShadows=false;
+        weapon.Flags.CastShadows=ThirdPersonBody is not null;
         driver.Transform=UsesOriginalGraph ? global::Transform.Zero : new global::Transform(-ViewOrigin);
         driver.SetAnimParameter("b_attack",attack);driver.SetAnimParameter("b_reload",reload);
         driver.SetAnimParameter("b_deploy",deploy);driver.SetAnimParameter("b_empty",empty);
@@ -116,6 +122,11 @@ public sealed class RetargetedWeapon : Component
         foreach(var p in stringParameters)driver.SetAnimParameter(p.Key,p.Value);
         foreach(var p in rotationParameters)driver.SetAnimParameter(p.Key,p.Value);
         driver.Update(deltaTime);
+        // Anchor after evaluating this frame's weapon pose. Using the previous frame's
+        // source hand adds an unwanted second kick and lets the gun slip in the grip.
+        if(ThirdPersonBody is {} body && body.TryGetBoneTransform(WorldGripBone,out var hand)
+            && SourceBone(WorldGripBone) is {} grip)
+            weapon.Transform=hand.ToWorld(grip.ToLocal(global::Transform.Zero));
         attack=reload=deploy=skipDeploy=dry=false;
         if (UsesOriginalGraph)
         {
