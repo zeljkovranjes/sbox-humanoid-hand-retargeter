@@ -46,7 +46,7 @@ public sealed class HandRetargetWindow : Widget
         var scroll=Layout.Add(new ScrollArea(this),1);scroll.Canvas=new Widget(scroll);scroll.Canvas.Layout=Layout.Column();scroll.Canvas.Layout.Margin=new Sandbox.UI.Margin(8,4,16,4);scroll.Canvas.Layout.Spacing=2;list=scroll.Canvas.Layout;
         options=Layout.Add(new Group(this){Title="Options",Icon="tune"});options.Layout=Layout.Row();options.Layout.Margin=new Sandbox.UI.Margin(14,30,14,12);options.Layout.Spacing=24;
         var a=options.Layout.AddColumn();a.Spacing=6;
-        graph=a.Add(new Checkbox("Auto Configure AnimGraph"){Value=true});graph.ToolTip="Generate a weapon action graph and synchronized hands/weapon prefab for weapon clips. Other clips get an idle/bind graph when missing. Existing graphs are preserved.";
+        graph=a.Add(new Checkbox("Auto Configure AnimGraph"){Value=true});graph.ToolTip="Preserve the complete source weapon graph with live custom-hand retargeting. Sources without a graph get a generated action graph. Creates a synchronized weapon prefab; existing assets are preserved.";
         backup=a.Add(new Checkbox("Back up target VMDL"){Value=true});
         weapon=a.Add(new Checkbox("Weapon-compatible arms"){Value=false});weapon.ToolTip="Keep animation graph ownership on the weapon. Arms are bonemerged onto it.";
         companion=a.Add(new Checkbox("Preserve source tracks"){Value=true});companion.ToolTip="Also export the original hierarchy and animation as a companion DMX, preserving weapon, camera and IK tracks.";

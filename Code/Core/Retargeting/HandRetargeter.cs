@@ -13,6 +13,29 @@ using Vector3 = System.Numerics.Vector3;
 /// and unmapped local transforms stay authored; helper constraints remain target-owned.</summary>
 public static class HandRetargeter
 {
+    /// <summary>One continuous graph stream, retaining digit angle history between evaluated frames.</summary>
+    public sealed class PoseStream
+    {
+        private readonly HandRetargetProfile profile;
+        private readonly HandMotionOptions options;
+        private readonly AngleHistory history;
+        public PoseStream(HandRetargetProfile profile, HandMotionOptions options)
+        { this.profile = profile; this.options = options; history = new(profile); }
+        public Pose Step(Pose source)
+        {
+            var pose = Solve(profile, source, history);
+            if (options.TransferWristPosition) ApplyWristMotion(profile, source, pose, options);
+            var sourceWorld = source.ToWorld(profile.Source);
+            foreach (var pair in profile.PreservedTracks)
+            {
+                var targetWorld = pose.ToWorld(profile.Target);
+                var parent = profile.Target[pair.Target].ParentIndex;
+                pose.Locals[pair.Target] = parent < 0 ? sourceWorld[pair.Source] : XForm.ToLocal(targetWorld[parent], sourceWorld[pair.Source]);
+            }
+            return pose;
+        }
+    }
+
     public static Pose RetargetPose(HandRetargetProfile profile, Pose sourcePose)
         => Solve(profile, sourcePose, null);
 

@@ -15,9 +15,9 @@ namespace HumanoidHandRetargeter.Editor;
 internal static class HandWeaponExport
 {
     internal sealed record Bundle(string ModelPath,string GraphPath,string WeaponPath,string HandsPath,
-        IReadOnlyList<WeaponGraphClip> Actions,int BoneCount,global::Vector3 ViewOrigin)
+        IReadOnlyList<WeaponGraphClip> Actions,int BoneCount,global::Vector3 ViewOrigin,string? LiveCalibration=null,string? LivePrefabPath=null)
     {
-        public string PrefabPath=>ModelPath[..ModelPath.LastIndexOf('/')]+"/weapon.prefab";
+        public string PrefabPath=>LivePrefabPath??ModelPath[..ModelPath.LastIndexOf('/')]+"/weapon.prefab";
     }
 
     public static string Prefab(Bundle bundle)
@@ -30,11 +30,15 @@ internal static class HandWeaponExport
             var component=go.GetOrAddComponent<RetargetedWeapon>();
             component.WeaponModel=Model.Load(bundle.WeaponPath);component.HandsModel=Model.Load(bundle.HandsPath);
             component.ViewOrigin=bundle.ViewOrigin;
+            component.LiveCalibration=bundle.LiveCalibration??"";
+            if(bundle.LiveCalibration is not null)go.GetOrAddComponent<RetargetedWeaponController>();
             var json=go.Serialize();json["Enabled"]=true;
-            string GuidFor(string suffix)=>new Guid(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(bundle.ModelPath+suffix)).Take(16).ToArray()).ToString();
+            string GuidFor(string suffix)=>new Guid(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(bundle.PrefabPath+suffix)).Take(16).ToArray()).ToString();
             json["__guid"]=GuidFor("object");
-            var data=((JsonArray)json["Components"]!).OfType<JsonObject>().Single();
+            var components=((JsonArray)json["Components"]!).OfType<JsonObject>().ToArray();
+            var data=components.First();
             data["__guid"]=GuidFor("component");data["AnimationModel"]=bundle.ModelPath;
+            for(var i=1;i<components.Length;i++)components[i]["__guid"]=GuidFor("component"+i);
             var prefab=new PrefabFile{RootObject=json};
             return prefab.Serialize().ToJsonString(new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerOptions.Default){WriteIndented=true});
         }
@@ -45,11 +49,36 @@ internal static class HandWeaponExport
         Dictionary<string,string> animations,Dictionary<string,string> assets,CancellationToken cancel)
     {
         var result=new List<Bundle>();
-        foreach(var group in clips.Where(c=>c.WeaponOffset.HasValue&&c.Source.ModelPath is not null)
+        foreach(var group in clips.Where(c=>c.Source.ModelPath is not null)
             .GroupBy(c=>c.Source.ModelPath!,StringComparer.OrdinalIgnoreCase))
         {
             cancel.ThrowIfCancellationRequested();
             var first=group.First();var source=first.Source;
+            // Keep the native graph and its original model together: all subgraphs, additive
+            // layers, selectors, masks, procedural nodes and unselected sequences remain intact.
+            var sourceWorld=new SceneWorld();
+            var sourceModel=new SceneModel(sourceWorld,Model.Load(source.ModelPath!),Transform.Zero){UseAnimGraph=true};
+            try
+            {
+                if(sourceModel.AnimationGraph is {IsError:true})
+                    throw new InvalidOperationException("The source AnimGraph could not load. Restore its dependencies before exporting; it will not be replaced with a simplified graph.");
+                if(sourceModel.AnimationGraph is {IsError:false} originalGraph)
+                {
+                    var setup=LiveHandSetup.Create(source.Scene.Skeleton,source.Mapping,target.Skeleton,target.Mapping,
+                        source.PalmFrames,target.PalmFrames,first.MotionOptions??new(){WeaponSpaceOffset=first.WeaponOffset});
+                    var calibration=setup.Serialize();
+                    // Validate the persisted form, including reviewed mappings and manual palm frames.
+                    _=LiveHandSetup.Deserialize(calibration).Calibrate();
+                    var liveIdentity=HandEditorPipeline.ContentKey("live-graph-v2-controls"+source.ModelPath+target.ModelPath+originalGraph.Name+calibration);
+                    var liveFolder=outputModel[..^5]+"_weapons/"+HandEditorPipeline.SourceKey(source)+"/"+liveIdentity;
+                    var liveEye=HumanoidHandRetargeter.Calibration.HandViewSpace.EyePosition(source.Scene.Skeleton,source.Mapping)/2.54f;
+                    result.Add(new(source.ModelPath!,originalGraph.Name,source.ModelPath!,target.ModelPath,[],source.Scene.Skeleton.Count,
+                        new global::Vector3(liveEye.X,liveEye.Y,liveEye.Z),calibration,liveFolder+"/weapon.prefab"));
+                    continue;
+                }
+            }
+            finally{sourceModel.Delete();sourceWorld.Delete();}
+            if(!first.WeaponOffset.HasValue)continue;
             // Prefer the plain action over variant poses/deltas. Every selected clip still exports
             // to the hands VMDL; the graph needs exactly one sequence for each supported action.
             var actions=group.Where(c=>WeaponAnimGraph.Classify(c.Original.Name).HasValue)

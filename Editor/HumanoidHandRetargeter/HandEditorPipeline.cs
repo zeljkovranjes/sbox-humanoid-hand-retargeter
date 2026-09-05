@@ -203,13 +203,16 @@ public static class HandEditorPipeline
             await MainThread(); foreach(var path in paths) AssetSystem.RegisterFile(path);
             foreach(var bundle in bundles)
             {
-                if(!await CompileAsync(System.IO.Path.Combine(Assets,bundle.ModelPath),token))throw new InvalidOperationException("Weapon animation model did not compile: "+bundle.ModelPath);
-                await MainThread();
-                await Task.Delay(100,token);await MainThread();
-                var owner=Model.Load(bundle.ModelPath);var graph=AnimationGraph.Load(bundle.GraphPath);
-                if(owner is null||owner.IsError||!owner.HasRenderMeshes()||owner.BoneCount<bundle.BoneCount||graph is null||graph.IsError
-                    ||!bundle.Actions.All(a=>owner.AnimationNames.Contains(a.Sequence)))throw new InvalidOperationException($"Weapon animation owner validation failed: bones {owner?.BoneCount}/{bundle.BoneCount}, meshes {owner?.MeshCount}, vertices {owner?.MeshInfo.TotalVertices}, triangles {owner?.MeshInfo.TotalTriangles}, graph error {graph?.IsError}, sequences {string.Join(",",owner?.AnimationNames??Array.Empty<string>())}.");
-                if(target.Skeleton.Bones.Any(b=>owner.Bones.GetBone(WeaponClipBuilder.HandPrefix+b.Name) is null))return false;
+                if(bundle.LiveCalibration is null)
+                {
+                    if(!await CompileAsync(System.IO.Path.Combine(Assets,bundle.ModelPath),token))throw new InvalidOperationException("Weapon animation model did not compile: "+bundle.ModelPath);
+                    await MainThread();
+                    await Task.Delay(100,token);await MainThread();
+                    var owner=Model.Load(bundle.ModelPath);var graph=AnimationGraph.Load(bundle.GraphPath);
+                    if(owner is null||owner.IsError||!owner.HasRenderMeshes()||owner.BoneCount<bundle.BoneCount||graph is null||graph.IsError
+                        ||!bundle.Actions.All(a=>owner.AnimationNames.Contains(a.Sequence)))throw new InvalidOperationException($"Weapon animation owner validation failed: bones {owner?.BoneCount}/{bundle.BoneCount}, meshes {owner?.MeshCount}, vertices {owner?.MeshInfo.TotalVertices}, triangles {owner?.MeshInfo.TotalTriangles}, graph error {graph?.IsError}, sequences {string.Join(",",owner?.AnimationNames??Array.Empty<string>())}.");
+                    if(target.Skeleton.Bones.Any(b=>owner.Bones.GetBone(WeaponClipBuilder.HandPrefix+b.Name) is null))return false;
+                }
                 ValidateMaterials(Model.Load(bundle.WeaponPath));
                 if(!await CompileAsync(System.IO.Path.Combine(Assets,bundle.PrefabPath),token))throw new InvalidOperationException("Weapon prefab did not compile: "+bundle.PrefabPath);
                 await MainThread();
@@ -248,7 +251,9 @@ public static class HandEditorPipeline
             }
             return true;
         },backup,cancel,generatedAssets);
-        return new(outputModel,prepared.Changes.Concat(bundles.Select(b=>$"Created weapon graph ({string.Join(", ",b.Actions.Select(a=>a.Action))}) and synchronized hands/weapon prefab: {b.PrefabPath}")).ToArray(),committed.BackupPath,bundles.Select(b=>b.PrefabPath).ToArray());
+        return new(outputModel,prepared.Changes.Concat(bundles.Select(b=>b.LiveCalibration is not null
+            ? $"Preserved complete source graph {b.GraphPath} with live custom-hand retargeting: {b.PrefabPath}"
+            : $"Created weapon graph ({string.Join(", ",b.Actions.Select(a=>a.Action))}) and synchronized hands/weapon prefab: {b.PrefabPath}")).ToArray(),committed.BackupPath,bundles.Select(b=>b.PrefabPath).ToArray());
     }
 
     private static float ExportPositionFactor(string text)
