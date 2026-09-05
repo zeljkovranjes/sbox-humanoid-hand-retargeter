@@ -2,7 +2,7 @@
   "Title": "Humanoid Hand Retargeter",
   "Type": "library",
   "Org": "notpointless",
-  "Ident": "humanoid_hand_retargeter",
+  "Ident": "chomnr_humanoid_hand_retargeter",
   "Schema": 1,
   "IncludeSourceFiles": true,
   "PackageReferences": [],
