@@ -6,7 +6,7 @@ namespace HumanoidHandRetargeter;
 
 /// <summary>Optional local player controls for exported weapons. Games may instead drive RetargetedWeapon directly.</summary>
 [Title("Retargeted Weapon Controls"), Category("Animation")]
-public sealed class RetargetedWeaponController : Component
+public sealed class RetargetedWeaponController : Component, ICameraModifier
 {
     [Property] public PlayerController? Player { get; set; }
     [Property] public bool ReadInput { get; set; } = true;
@@ -33,6 +33,7 @@ public sealed class RetargetedWeaponController : Component
     private WeaponMagazine? magazine;
     private RetargetedWeapon? weapon;
     private float nextShot, reloadEnds, currentFov;
+    public int CameraOrder => 200;
     protected override void OnStart()
     {
         weapon=GetComponent<RetargetedWeapon>();
@@ -90,7 +91,7 @@ public sealed class RetargetedWeaponController : Component
             if(Input.Down("Attack1")&&!weapon.Sprinting)Fire();
         }
         weapon.ShowHands=!Player.ThirdPerson;
-        weapon.WorldTransform=Player.EyeTransform;
+        if(Player.ThirdPerson)weapon.WorldTransform=Player.EyeTransform;
         // Keep the body graph warm even when hidden, so a camera switch during a shot
         // or reload reveals the same action rather than restarting a holding pose.
         UpdateBodyPose();
@@ -103,13 +104,20 @@ public sealed class RetargetedWeaponController : Component
         body.Set("holdtype",BodyHoldType);body.Set("holdtype_handedness",BodyHandedness);
         body.Set("aim_body_weight",1f);
     }
-    protected override void OnPreRender()
+    public void ModifyCamera(CameraComponent camera,ref CameraView view)
     {
-        if(Player is not null&&!Player.ThirdPerson&&Scene.Camera is {} camera)
+        if(Player is not null&&!Player.ThirdPerson&&camera==Scene.Camera)
         {
             currentFov=MathX.Lerp(currentFov,Aiming?AimFov:HipFov,Math.Clamp(Time.Delta*12,0,1));
-            camera.FieldOfView=currentFov;
+            view.FieldOfView=currentFov;
         }
+    }
+    public void PostCameraSetup(CameraComponent camera,in CameraView view)
+    {
+        // EyeTransform during Update can precede the player's final camera pose.
+        // Place both viewmodel meshes against the composed view before PreRender.
+        if(weapon is not null&&Player is not null&&!Player.ThirdPerson&&camera==Scene.Camera)
+            weapon.WorldTransform=new global::Transform(view.Position,view.Rotation);
     }
     protected override void OnDisabled()
     {
