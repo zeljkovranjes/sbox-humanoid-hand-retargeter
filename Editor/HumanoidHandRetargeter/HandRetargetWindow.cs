@@ -75,7 +75,9 @@ public sealed class HandRetargetWindow : Widget
 
     public Task SelectTargetAsync(string path)=>Run(async token=>{
         Target=await HandEditorPipeline.LoadTargetAsync(path,token);
-        targets.AddItem(System.IO.Path.GetFileName(path),"pan_tool",()=>{},selected:true);
+        targets.CurrentIndex=path.Equals(HandEditorPipeline.HumanArms,StringComparison.OrdinalIgnoreCase)?0
+            :path.Equals(HandEditorPipeline.CitizenArms,StringComparison.OrdinalIgnoreCase)?1
+            :path.EndsWith(".fbx",StringComparison.OrdinalIgnoreCase)?3:2;
         LastBake=Array.Empty<HandBakedClip>();
         status.Text="Target: "+System.IO.Path.GetFileName(path)+(Target.Mapping.NeedsReview?" — confirm Target Mapping":"");
     });
