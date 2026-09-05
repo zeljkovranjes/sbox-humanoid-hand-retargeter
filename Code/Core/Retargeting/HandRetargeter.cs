@@ -116,18 +116,22 @@ public static class HandRetargeter
                 var oldLower = world[lower].Rot;
                 SetWorldRotation(upper, correction.UpperWorldDelta * world[upper].Rot);
                 SetWorldRotation(lower, correction.LowerWorldDelta * oldLower);
-                if(options.WeaponSpaceOffset is {} elbowOffset && pair.SourceForearm is int sourceElbow)
+                if(options.WeaponSpaceOffset.HasValue && pair.SourceForearm is int sourceElbow && pair.SourceUpperArm is int sourceShoulder)
                 {
-                    // Wrist IK alone leaves the bend plane dependent on the target bind pose.
-                    // Aim the elbow toward the authored source elbow in the same weapon space,
-                    // rotating both arm segments around the shoulder-to-wrist axis.
+                    // Transfer the source bend plane between the two shoulder-to-wrist axes.
+                    // An absolute source elbow position can lie on the target arm's axis
+                    // when proportions differ, flipping its pole as the weapon recoils.
                     var axis=world[pair.Target].Pos-world[upper].Pos;
-                    if(axis.LengthSquared()>1e-8f)
+                    var sourceAxis=sourceWorld[pair.Source].Pos-sourceWorld[sourceShoulder].Pos;
+                    if(axis.LengthSquared()>1e-8f&&sourceAxis.LengthSquared()>1e-8f)
                     {
                         axis=Vector3.Normalize(axis);
+                        sourceAxis=Vector3.Normalize(sourceAxis);
                         var actual=world[lower].Pos-world[upper].Pos;
-                        var wanted=sourceWorld[sourceElbow].Pos+elbowOffset-world[upper].Pos;
-                        actual-=axis*Vector3.Dot(actual,axis);wanted-=axis*Vector3.Dot(wanted,axis);
+                        var wanted=sourceWorld[sourceElbow].Pos-sourceWorld[sourceShoulder].Pos;
+                        wanted-=sourceAxis*Vector3.Dot(wanted,sourceAxis);
+                        wanted=Vector3.Transform(wanted,MathQ.FromTo(sourceAxis,axis));
+                        actual-=axis*Vector3.Dot(actual,axis);
                         // A straight arm has no defined pole: retain the preceding IK plane.
                         if(actual.LengthSquared()>1e-6f&&wanted.LengthSquared()>1e-6f)
                         {
