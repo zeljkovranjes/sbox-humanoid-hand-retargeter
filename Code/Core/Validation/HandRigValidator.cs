@@ -20,11 +20,7 @@ public static class HandRigValidator
 
         foreach (var bone in skeleton.Bones)
         {
-            var p = bone.RestLocal.Pos;
-            var q = bone.RestLocal.Rot;
-            if (!float.IsFinite(p.X) || !float.IsFinite(p.Y) || !float.IsFinite(p.Z)
-                || !float.IsFinite(q.X) || !float.IsFinite(q.Y) || !float.IsFinite(q.Z) || !float.IsFinite(q.W)
-                || !float.IsFinite(q.LengthSquared()) || MathF.Abs(q.LengthSquared() - 1f) > 1e-3f)
+            if (!PoseValidator.ValidTransform(bone.RestLocal))
                 issues.Add(new("invalid-rest", $"Bone '{bone.Name}' has an invalid rest transform.", Bone: bone.Index));
             var world = skeleton.RestWorld[bone.Index].Pos;
             if (!float.IsFinite(world.X) || !float.IsFinite(world.Y) || !float.IsFinite(world.Z))
