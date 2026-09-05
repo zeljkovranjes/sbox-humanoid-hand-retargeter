@@ -1,0 +1,19 @@
+.work/
+**/bin/
+**/obj/
+# Local planning, audits, tests, fixtures and development tooling.
+plan.md
+Docs/
+docs/
+dev/
+Code/Tests/
+Tests/
+TestResults/
+.vs/
+.sbox/
+.bin/
+Code/*.csproj
+Editor/*.csproj
+Code/Properties/
+Editor/Properties/
+*.user
