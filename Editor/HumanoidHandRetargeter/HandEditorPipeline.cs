@@ -281,6 +281,7 @@ public static class HandEditorPipeline
 
     public static string ModelPath(string path)
     {
+        if(path.EndsWith(".vmdl_c",StringComparison.OrdinalIgnoreCase))path=path[..^2];
         if(System.IO.Path.IsPathRooted(path)) path=System.IO.Path.GetRelativePath(Assets,path);
         return VmdlSetupService.NormalizeAssetPath(path,".vmdl");
     }

@@ -70,7 +70,7 @@ public sealed class HandRetargetWindow : Widget
         if(instance is null||!instance.IsValid)EditorWindow.DockManager.SetDockState(DockTitle,true);
         if(instance is { IsValid: true })EditorWindow.DockManager.RaiseDock(instance);return instance;
     }
-    void PickSources(){var picker=new FileDialog(null){Title="Add hand animations"};picker.SetFindExistingFiles();picker.SetModeOpen();picker.SetNameFilter("Hand animation files (*.fbx *.vmdl)");if(picker.Execute())_=AddFilesAsync(picker.SelectedFiles.ToArray());}
+    void PickSources(){var picker=new FileDialog(null){Title="Add hand animations"};picker.SetFindExistingFiles();picker.SetModeOpen();picker.SetNameFilter("Hand animation files (*.fbx *.vmdl *.vmdl_c)");if(picker.Execute())_=AddFilesAsync(picker.SelectedFiles.ToArray());}
     void PickTargetModel(){var picker=AssetPicker.Create(this,AssetType.Model);picker.OnAssetPicked=assets=>{var asset=assets.FirstOrDefault();if(asset is not null)_=SelectTargetAsync(asset.Path);};picker.Show();}
     void PickTargetFbx(){var picker=new FileDialog(null){Title="Select target FPS hands"};picker.SetFindExistingFiles();picker.SetModeOpen();picker.SetNameFilter("Hand models (*.fbx)");if(picker.Execute()&&picker.SelectedFiles.FirstOrDefault() is {} path)_=SelectTargetAsync(path);}
 
