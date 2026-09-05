@@ -93,6 +93,21 @@ public static class HandRetargeter
                 var oldLower = world[lower].Rot;
                 SetWorldRotation(upper, correction.UpperWorldDelta * world[upper].Rot);
                 SetWorldRotation(lower, correction.LowerWorldDelta * oldLower);
+                if(options.WeaponSpaceOffset.HasValue&&!pair.HasTwistHelpers)
+                {
+                    // Without authored twist helpers, put axial pronation in the forearm
+                    // instead of winding the wrist through the fixed palm orientation.
+                    // Rotating about elbow-to-wrist leaves the grip position unchanged.
+                    var axis=world[pair.Target].Pos-world[lower].Pos;
+                    if(axis.LengthSquared()>1e-8f)
+                    {
+                        var restRelative=MathQ.Normalize(Quaternion.Conjugate(profile.Target.RestWorld[lower].Rot)*profile.Target.RestWorld[pair.Target].Rot);
+                        var relaxedLower=MathQ.Normalize(wristRotation*Quaternion.Conjugate(restRelative));
+                        var delta=MathQ.Normalize(relaxedLower*Quaternion.Conjugate(world[lower].Rot));
+                        MathQ.SwingTwist(delta,Vector3.Normalize(axis),out _,out var roll);
+                        SetWorldRotation(lower,roll*world[lower].Rot);
+                    }
+                }
                 SetWorldRotation(pair.Target, wristRotation);
                 if(options.WeaponSpaceOffset.HasValue&&Vector3.Distance(world[pair.Target].Pos,desired)>.1f)
                     throw new InvalidOperationException("The target arm cannot reach the weapon grip without stretching. Adjust the rig's shoulder placement or disable Preserve weapon grip.");
