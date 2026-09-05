@@ -1,4 +1,4 @@
-// Reused from humanoid-retargeter 26084c96c3fc870aaf9a5bd798de063ce2fd62df; namespace only.
+// Reused from humanoid-retargeter 26084c96c3fc870aaf9a5bd798de063ce2fd62df; shared sample alignment extracted.
 #nullable enable annotations
 
 using System;
@@ -18,6 +18,10 @@ namespace HumanoidHandRetargeter.Formats;
 /// </summary>
 public static class QuaternionContinuity
 {
+    /// <summary>Returns the sample in the same hemisphere as its preceding sample.</summary>
+    public static Quaternion Align(Quaternion previous, Quaternion sample)
+        => Quaternion.Dot(previous, sample) < 0f ? Quaternion.Negate(sample) : sample;
+
     /// <summary>
     /// Negates quaternions in place where needed so every consecutive pair of the track has a
     /// non-negative dot product. The first sample is kept as-is.
@@ -26,8 +30,7 @@ public static class QuaternionContinuity
     {
         for (int i = 1; i < track.Length; i++)
         {
-            if (Quaternion.Dot(track[i - 1], track[i]) < 0f)
-                track[i] = Quaternion.Negate(track[i]);
+            track[i] = Align(track[i - 1], track[i]);
         }
     }
 
@@ -48,12 +51,8 @@ public static class QuaternionContinuity
             var prev = frames[0][bone].Rot;
             for (int f = 1; f < frames.Count; f++)
             {
-                var q = frames[f][bone].Rot;
-                if (Quaternion.Dot(prev, q) < 0f)
-                {
-                    q = Quaternion.Negate(q);
-                    frames[f][bone].Rot = q;
-                }
+                var q = Align(prev, frames[f][bone].Rot);
+                frames[f][bone].Rot = q;
                 prev = q;
             }
         }
