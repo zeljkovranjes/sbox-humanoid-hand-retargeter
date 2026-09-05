@@ -22,7 +22,8 @@ public static class VmdlSetupTransaction
     public static async Task<VmdlCommitResult> CommitAsync(string assetsDirectory, string modelPath,
         string? expectedVmdl, VmdlSetupResult prepared, IReadOnlyDictionary<string, string> animations,
         Func<IReadOnlyList<string>, CancellationToken, Task<bool>> compileAndValidate,
-        bool backupExisting = true, CancellationToken cancellationToken = default)
+        bool backupExisting = true, CancellationToken cancellationToken = default,
+        IReadOnlyDictionary<string,string>? generatedAssets = null)
     {
         ArgumentNullException.ThrowIfNull(prepared);
         ArgumentNullException.ThrowIfNull(animations);
@@ -40,6 +41,16 @@ public static class VmdlSetupTransaction
             var writes = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
             foreach (var (path, content) in animations)
                 writes.Add(Resolve(path, ".dmx"), Encoding.UTF8.GetBytes(content));
+            var immutable=new List<string>();
+            if(generatedAssets is not null)foreach(var (path,content) in generatedAssets)
+            {
+                var extension=Path.GetExtension(path).ToLowerInvariant();
+                if(extension is not (".vmdl" or ".vanmgrph" or ".prefab" or ".fbx"))throw new ArgumentException("Unsupported generated weapon asset.");
+                var resolved=Resolve(path,extension);var bytes=Encoding.UTF8.GetBytes(content);
+                if(File.Exists(resolved)&&!File.ReadAllBytes(resolved).SequenceEqual(bytes))
+                    throw new IOException($"Generated asset '{path}' has been edited. Choose a new output path to preserve it.");
+                writes.Add(resolved,bytes);immutable.Add(resolved);
+            }
             foreach (var animation in prepared.Animations)
             {
                 var path = Resolve(animation.SourceFilename, ".dmx");
@@ -60,6 +71,8 @@ public static class VmdlSetupTransaction
             var previous = writes.Keys.ToDictionary(p => p, p => File.Exists(p) ? File.ReadAllBytes(p) : null,
                 StringComparer.OrdinalIgnoreCase);
             previous[model] = modelBytes;
+            foreach(var path in immutable)
+                if(previous[path] is {} bytes&&!bytes.SequenceEqual(writes[path]))throw new IOException("A generated asset changed while preparing the save.");
             if (prepared.GeneratedGraphPath is { } generatedPath)
             {
                 var graph = Resolve(generatedPath, ".vanmgrph");

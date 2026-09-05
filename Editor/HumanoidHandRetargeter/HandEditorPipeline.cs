@@ -40,9 +40,9 @@ public sealed class HandTarget
     public IReadOnlyDictionary<HandSide, Quat>? PalmFrames { get; set; }
 }
 
-public sealed record HandExportResult(string ModelPath,IReadOnlyList<string> Changes,string? BackupPath);
+public sealed record HandExportResult(string ModelPath,IReadOnlyList<string> Changes,string? BackupPath,IReadOnlyList<string>? WeaponPrefabs=null);
 
-public sealed record HandBakedClip(HandSource Source, Clip Original, Clip Baked, IReadOnlyList<string> Notes,Vec? WeaponOffset=null);
+public sealed record HandBakedClip(HandSource Source, Clip Original, Clip Baked, IReadOnlyList<string> Notes,Vec? WeaponOffset=null,HandMotionOptions? MotionOptions=null);
 
 /// <summary>Editor adapter over the pure importer, shared bake and transactional setup.
 /// Engine calls use the same main-thread dispatch convention as the audited EditorPipeline.</summary>
@@ -106,6 +106,15 @@ public static class HandEditorPipeline
             clips.Add(sampling.Sample(name,fps,cancel));
             await Task.Delay(1,cancel); await MainThread();
         }
+        // Facepunch weapons author recoil as additive layers. Capture their complete firing
+        // pose through the original weapon graph instead of retargeting a delta as a full pose.
+        if(skeleton.IndexOf("weapon_root")>=0&&!clips.Any(c=>WeaponAnimGraph.Classify(c.Name)==WeaponAction.Fire)
+            &&clips.FirstOrDefault(c=>c.Name.StartsWith("Fire_",StringComparison.OrdinalIgnoreCase)&&c.Name.EndsWith("_delta",StringComparison.OrdinalIgnoreCase)
+                &&!c.Name.Contains("Hold",StringComparison.OrdinalIgnoreCase)&&!c.Name.Contains("Dry",StringComparison.OrdinalIgnoreCase)) is {} recoil)
+        {
+            var firing=sampling.SampleFire(Math.Max(.25f,(recoil.FrameCount-1)/recoil.Fps),fps,cancel);
+            if(firing is not null)clips.Add(firing);
+        }
         return new() { Path=path,ModelPath=path, Scene=new SourceScene(skeleton,clips,2.54f,upAxis:2,frontAxis:0,coordAxis:1),
             PalmFrames=HandPresetStore.LoadPalms(skeleton), Mapping=HandPresetStore.Load(skeleton) ?? HandRigDetector.Detect(skeleton) };
     }
@@ -126,7 +135,7 @@ public static class HandEditorPipeline
             SolveArmIk=options.SolveArmIk,PreserveWeaponGrip=options.PreserveWeaponGrip,WeaponSpaceOffset=weaponOffset,
             WristTravelBasis=options.WristTravelBasis??(source.ModelPath is not null?Quat.Identity:null)};
         var notes=weaponOffset.HasValue?profile.Notes.Concat(new[]{"Preserved both palm grip anchors in one fixed weapon space; weapon motion is not scaled per arm."}).ToArray():profile.Notes;
-        return new(source,clip,HandRetargeter.Bake(profile,clip,options,cancel),notes,weaponOffset);
+        return new(source,clip,HandRetargeter.Bake(profile,clip,options,cancel),notes,weaponOffset,options);
     }
 
     public static async Task<string> ExportAsync(HandTarget target,IReadOnlyList<HandBakedClip> clips,string outputModel,
@@ -172,21 +181,46 @@ public static class HandEditorPipeline
         files[folder+"/bind.dmx"] = DmxWriter.Write(exportSkeleton,bind,new() {Name="bindPose",UpAxisY=false,ForwardParity=1});
         foreach(var clip in clips)
         {
-            var stem=SafeName(clip.Baked.Name); var name=stem; var suffix=1;
+            var stem=SourceKey(clip.Source)+"_"+SafeName(clip.Baked.Name); var name=stem; var suffix=1;
             while(!names.Add(name)) name=stem+"_"+(++suffix);
-            var file=folder+"/"+name+".dmx";
-            files[file]=DmxWriter.Write(exportSkeleton,ExportUnits(clip.Baked),new() {Name=name,UpAxisY=false,ForwardParity=1,ChannelExcludedBones=target.Mapping.Hands.SelectMany(h=>h.TwistOrHelperBones).ToHashSet()});
+            var content=DmxWriter.Write(exportSkeleton,ExportUnits(clip.Baked),new() {Name=name,UpAxisY=false,ForwardParity=1,ChannelExcludedBones=target.Mapping.Hands.SelectMany(h=>h.TwistOrHelperBones).ToHashSet()});
+            var file=folder+"/"+name+"_"+ContentKey(content)+".dmx";
+            files[file]=content;
             entries.Add(new(name,file,clip.Baked.Looping));
             if(preserveSourceTracks)
             {
                 // Full source companion intentionally retains every authored camera,
                 // weapon and IK track with its original hierarchy, units and timing.
-                files[folder+"/source_tracks/"+name+".dmx"]=DmxWriter.Write(clip.Source.Scene.Skeleton,clip.Original,new() {Name=name+"_source_tracks",UpAxisY=clip.Source.Scene.UpAxis==1,ForwardParity=clip.Source.ModelPath is null?2:1});
+                var tracks=DmxWriter.Write(clip.Source.Scene.Skeleton,clip.Original,new() {Name=name+"_source_tracks",UpAxisY=clip.Source.Scene.UpAxis==1,ForwardParity=clip.Source.ModelPath is null?2:1});
+                files[folder+"/source_tracks/"+name+"_"+ContentKey(tracks)+".dmx"]=tracks;
             }
         }
         var prepared=VmdlSetupService.Prepare(original,entries,new() {ModelPath=outputModel,BindPoseSource=folder+"/bind.dmx",AutoConfigureAnimGraph=autoGraph,WeaponCompatibleArms=weaponCompatible});
+        var generatedAssets=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+        var bundles=autoGraph?HandWeaponExport.Prepare(target,clips,outputModel,files,generatedAssets,cancel):Array.Empty<HandWeaponExport.Bundle>();
+        foreach(var bundle in bundles)generatedAssets[bundle.PrefabPath]=HandWeaponExport.Prefab(bundle);
         var committed=await VmdlSetupTransaction.CommitAsync(Assets,outputModel,existing,prepared,files,async(paths,token)=>{
             await MainThread(); foreach(var path in paths) AssetSystem.RegisterFile(path);
+            foreach(var bundle in bundles)
+            {
+                if(!await CompileAsync(System.IO.Path.Combine(Assets,bundle.ModelPath),token))throw new InvalidOperationException("Weapon animation model did not compile: "+bundle.ModelPath);
+                await MainThread();
+                await Task.Delay(100,token);await MainThread();
+                var owner=Model.Load(bundle.ModelPath);var graph=AnimationGraph.Load(bundle.GraphPath);
+                if(owner is null||owner.IsError||!owner.HasRenderMeshes()||owner.BoneCount<bundle.BoneCount||graph is null||graph.IsError
+                    ||!bundle.Actions.All(a=>owner.AnimationNames.Contains(a.Sequence)))throw new InvalidOperationException($"Weapon animation owner validation failed: bones {owner?.BoneCount}/{bundle.BoneCount}, meshes {owner?.MeshCount}, vertices {owner?.MeshInfo.TotalVertices}, triangles {owner?.MeshInfo.TotalTriangles}, graph error {graph?.IsError}, sequences {string.Join(",",owner?.AnimationNames??Array.Empty<string>())}.");
+                if(target.Skeleton.Bones.Any(b=>owner.Bones.GetBone(WeaponClipBuilder.HandPrefix+b.Name) is null))return false;
+                ValidateMaterials(Model.Load(bundle.WeaponPath));
+                if(!await CompileAsync(System.IO.Path.Combine(Assets,bundle.PrefabPath),token))throw new InvalidOperationException("Weapon prefab did not compile: "+bundle.PrefabPath);
+                await MainThread();
+                // The compiled file reaches disk before the editor's asset record updates.
+                // Managed resource loading uses that record, not File.Exists.
+                var prefabAsset=AssetSystem.FindByPath(bundle.PrefabPath);
+                for(var wait=0;wait<50&&string.IsNullOrEmpty(prefabAsset.GetCompiledFile(true));wait++)
+                {await Task.Delay(100,token);await MainThread();}
+                var prefab=prefabAsset.LoadResource<PrefabFile>();
+                if(prefab is null||prefab.IsError||SceneUtility.GetPrefabScene(prefab) is null)throw new InvalidOperationException("Weapon prefab could not be loaded: "+bundle.PrefabPath);
+            }
             if(!await CompileAsync(absolute,token)) return false;
             await MainThread(); var model=Model.Load(outputModel);
             if(model is null || model.IsError || !prepared.Animations.All(a=>model.AnimationNames.Contains(a.SequenceName)))return false;
@@ -213,8 +247,8 @@ public static class HandEditorPipeline
                 }
             }
             return true;
-        },backup,cancel);
-        return new(outputModel,prepared.Changes,committed.BackupPath);
+        },backup,cancel,generatedAssets);
+        return new(outputModel,prepared.Changes.Concat(bundles.Select(b=>$"Created weapon graph ({string.Join(", ",b.Actions.Select(a=>a.Action))}) and synchronized hands/weapon prefab: {b.PrefabPath}")).ToArray(),committed.BackupPath,bundles.Select(b=>b.PrefabPath).ToArray());
     }
 
     private static float ExportPositionFactor(string text)
@@ -292,6 +326,8 @@ public static class HandEditorPipeline
         return VmdlSetupService.NormalizeAssetPath(path,".vmdl");
     }
     public static string SafeName(string name) => string.Concat(name.Select(c=>char.IsLetterOrDigit(c)||c=='_'||c=='-'?c:'_')).Trim('_') is {Length:>0} result ? result : "animation";
+    internal static string ContentKey(string text)=>Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text))).ToLowerInvariant()[..16];
+    internal static string SourceKey(HandSource source)=>SafeName(System.IO.Path.GetFileNameWithoutExtension(source.Path))+"_"+ContentKey(source.Path.Replace('\\','/').ToLowerInvariant())[..8];
 
     private sealed class ModelSampler : IDisposable
     {
@@ -316,6 +352,26 @@ public static class HandEditorPipeline
             }
             return new(name,fps,metadata.Sequence.Looping,frames);
             } finally {model.Delete();}
+        }
+        public Clip? SampleFire(float duration,float fps,CancellationToken cancel)
+        {
+            var model=new SceneModel(world,asset,Transform.Zero){UseAnimGraph=true};
+            try
+            {
+                if(model.AnimationGraph is null||model.AnimationGraph.IsError)return null;
+                model.SetAnimParameter("skeleton",0);model.SetAnimParameter("b_deploy_skip",true);
+                for(var i=0;i<120;i++){cancel.ThrowIfCancellationRequested();model.Update(1f/60);}
+                model.SetAnimParameter("b_deploy_skip",false);
+                var frames=new List<XForm[]>();
+                for(var f=0;f<=Math.Max(1,(int)MathF.Ceiling(duration*fps));f++)
+                {
+                    cancel.ThrowIfCancellationRequested();model.SetAnimParameter("b_attack",f==0);model.Update(f==0?0:1f/fps);
+                    var worlds=bones.Select(b=>FromEngine(model.GetBoneWorldTransform(b))).ToArray();
+                    frames.Add(skeleton.Bones.Select(b=>b.ParentIndex<0?worlds[b.Index]:XForm.ToLocal(worlds[b.ParentIndex],worlds[b.Index])).ToArray());
+                }
+                return new Clip("Fire",fps,false,frames);
+            }
+            finally{model.Delete();}
         }
         public void Dispose() {world.Delete();metadataScene.Destroy();}
     }

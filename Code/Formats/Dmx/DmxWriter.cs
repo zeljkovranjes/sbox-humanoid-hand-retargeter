@@ -29,6 +29,9 @@ public sealed class DmxWriteOptions
     /// <summary>DMX forward-axis parity: 1 for s&box Z-up/X-forward data, 2 for the inherited FBX convention.</summary>
     public int ForwardParity { get; set; } = 2;
 
+    /// <summary>Expose DmeModel as a model source for ModelDoc SkeletonFile instead of an animation skeleton.</summary>
+    public bool SkeletonModel { get; set; }
+
     /// <summary>
     /// Skeleton bone indices that get NO DmeChannel pair: the bones keep their DmeJoint and
     /// bind (rest) transform, but no animation channels are written for them — the engine then
@@ -103,7 +106,7 @@ public static class DmxWriter
         w.BeginTopLevel("DmElement");
         w.Attr("name", "string", "root");
 
-        w.BeginInlineAttr("skeleton", "DmeModel");
+        w.BeginInlineAttr(options.SkeletonModel ? "model" : "skeleton", "DmeModel");
         w.Attr("name", "string", options.Name);
         w.BeginInlineAttr("transform", "DmeTransform");
         w.Attr("position", "vector3", "0 0 0");

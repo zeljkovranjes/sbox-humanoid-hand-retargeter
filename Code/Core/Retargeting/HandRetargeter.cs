@@ -93,6 +93,30 @@ public static class HandRetargeter
                 var oldLower = world[lower].Rot;
                 SetWorldRotation(upper, correction.UpperWorldDelta * world[upper].Rot);
                 SetWorldRotation(lower, correction.LowerWorldDelta * oldLower);
+                if(options.WeaponSpaceOffset is {} elbowOffset && pair.SourceForearm is int sourceElbow)
+                {
+                    // Wrist IK alone leaves the bend plane dependent on the target bind pose.
+                    // Aim the elbow toward the authored source elbow in the same weapon space,
+                    // rotating both arm segments around the shoulder-to-wrist axis.
+                    var axis=world[pair.Target].Pos-world[upper].Pos;
+                    if(axis.LengthSquared()>1e-8f)
+                    {
+                        axis=Vector3.Normalize(axis);
+                        var actual=world[lower].Pos-world[upper].Pos;
+                        var wanted=sourceWorld[sourceElbow].Pos+elbowOffset-world[upper].Pos;
+                        actual-=axis*Vector3.Dot(actual,axis);wanted-=axis*Vector3.Dot(wanted,axis);
+                        // A straight arm has no defined pole: retain the preceding IK plane.
+                        if(actual.LengthSquared()>1e-6f&&wanted.LengthSquared()>1e-6f)
+                        {
+                            actual=Vector3.Normalize(actual);wanted=Vector3.Normalize(wanted);
+                            var angle=MathF.Atan2(Vector3.Dot(axis,Vector3.Cross(actual,wanted)),Vector3.Dot(actual,wanted));
+                            var pole=Quaternion.CreateFromAxisAngle(axis,angle);
+                            oldLower=world[lower].Rot;
+                            SetWorldRotation(upper,pole*world[upper].Rot);
+                            SetWorldRotation(lower,pole*oldLower);
+                        }
+                    }
+                }
                 if(options.WeaponSpaceOffset.HasValue&&!pair.HasTwistHelpers)
                 {
                     // Without authored twist helpers, put axial pronation in the forearm
