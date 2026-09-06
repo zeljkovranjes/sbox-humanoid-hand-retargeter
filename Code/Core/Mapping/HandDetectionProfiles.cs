@@ -66,6 +66,7 @@ internal static partial class HandDetectionProfiles
             if(best.Select(p=>(p.Role,p.Side)).Distinct().Count()==1)hints[pair.Key]=best[0];
         }
         ResolveNumberedFpsHands(rig,hints);
+        ResolveUnlabelledSplitArms(rig,hints);
         return hints;
     }
     // Numbered FPS rays can run from thumb to pinky or in reverse, with an

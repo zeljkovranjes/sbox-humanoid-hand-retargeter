@@ -270,6 +270,7 @@ public static class HandRigDetector
                 && new[] { "hand", "wrist", "handl", "handr", "wristl", "wristr", "handleft", "handright", "wristleft", "wristright" }
                     .Any(suffix => Core.EndsWith(suffix, StringComparison.Ordinal));
             if(hint?.Role=="Hand"&&!IsHelper&&!IsNonHandTrack&&!IsTip)IsWrist=true;
+            else if(hint is not null)IsWrist=false;
         }
     }
 }
