@@ -296,9 +296,24 @@ public static class HandEditorPipeline
         var materials=await Task.Run(()=>FbxMaterialAssets.Inspect(file,bytes),cancel);
         importNotes.AddRange(materials.Notes);
         var hash=materials.Signature;
-        var folder="models/hand_retargeter/targets/"+SafeName(System.IO.Path.GetFileNameWithoutExtension(file))+"_"+hash+"_rig6";
+        var folder="models/hand_retargeter/targets/"+SafeName(System.IO.Path.GetFileNameWithoutExtension(file))+"_"+hash+"_rig9";
         var mesh=folder+"/hands.fbx"; var model=folder+"/hands.vmdl";
         var scene=await Task.Run(()=>FbxImporter.Import(bytes,new(){SampleFps=(float)FbxScene.Build(FbxTokenizer.Parse(bytes)).FrameRate}),cancel);
+        var embeddedClips=scene.Clips;
+        var repaired=await Task.Run(()=>
+        {
+            var result=FbxBindPoseFixer.TryFix(bytes,out var report);
+            return (Bytes:result,Report:report);
+        },cancel);
+        if(repaired.Bytes is {} repairedBytes)
+        {
+            var repairedScene=await Task.Run(()=>FbxImporter.Import(repairedBytes),cancel);
+            if(!scene.Skeleton.Bones.Select(b=>(b.Name,b.ParentIndex)).SequenceEqual(repairedScene.Skeleton.Bones.Select(b=>(b.Name,b.ParentIndex))))
+                throw new InvalidOperationException("Bind-pose repair changed the target hierarchy; the original FBX was not modified.");
+            scene=repairedScene;bytes=repairedBytes;
+            importNotes.Add("Repaired the imported copy from its authored bind pose: "+repaired.Report);
+        }
+        var meshNames=FbxSkinnedMeshes.ReadNames(bytes);
         await MainThread();
         var meshAbs=System.IO.Path.Combine(Assets,mesh); Directory.CreateDirectory(System.IO.Path.GetDirectoryName(meshAbs)!);
         if(!File.Exists(meshAbs)) File.WriteAllBytes(meshAbs,bytes);
@@ -315,10 +330,10 @@ public static class HandEditorPipeline
             File.WriteAllText(System.IO.Path.Combine(Assets,bindPath),DmxWriter.Write(rig,new Clip("bindPose",30,false,new(){Pose.Rest(rig).Locals}),new(){Name="bindPose",UpAxisY=scene.UpAxis==1}));
             var entries=new List<HandAnimationEntry>();
             var names=new HashSet<string>(StringComparer.OrdinalIgnoreCase){"bindPose"};
-            for(var i=0;i<scene.Clips.Count;i++)
+            for(var i=0;i<embeddedClips.Count;i++)
             {
                 cancel.ThrowIfCancellationRequested();
-                var clip=scene.Clips[i];
+                var clip=embeddedClips[i];
                 var stem=SafeName(clip.Name).Replace('-','_');
                 var name=stem;var suffix=2;
                 while(!names.Add(name))name=stem+"_"+suffix++;
@@ -329,7 +344,7 @@ public static class HandEditorPipeline
                 AssetSystem.RegisterFile(System.IO.Path.Combine(Assets,path));
                 entries.Add(new(name,path,clip.Looping));
             }
-            var prepared=VmdlSetupService.Prepare(HandModelFactory.Create(mesh:mesh,meshUnitScaleCm:scene.UnitScaleCm,materialRemaps:remaps),entries,new(){ModelPath=model,BindPoseSource=bindPath,AutoConfigureAnimGraph=false});
+            var prepared=VmdlSetupService.Prepare(HandModelFactory.Create(mesh:mesh,meshUnitScaleCm:scene.UnitScaleCm,materialRemaps:remaps,meshNames:meshNames),entries,new(){ModelPath=model,BindPoseSource=bindPath,AutoConfigureAnimGraph=false});
             File.WriteAllText(modelAbs,prepared.VmdlText);
             AssetSystem.RegisterFile(System.IO.Path.Combine(Assets,bindPath));
         }

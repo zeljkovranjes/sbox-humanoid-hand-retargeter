@@ -11,8 +11,13 @@ public sealed record HandTargetFit(float Scale, bool TurnAround)
 {
     public static HandTargetFit Analyze(Skel rig, HandMappingResult mapping)
     {
-        if(mapping.NeedsReview)return new(1,false);
-        var arms=mapping.Hands.Where(h=>h.UpperArm.HasValue&&h.Forearm.HasValue).ToArray();
+        // Digit uncertainty must not prevent fitting a well-defined arm chain.
+        // Validate the arm evidence independently, including side uniqueness.
+        bool Valid(int i)=>i>=0&&i<rig.Count;
+        var arms=mapping.Hands.Where(h=>mapping.Hands.Count(other=>other.Side==h.Side)==1
+            &&Enum.IsDefined(typeof(HandSide),h.Side)
+            &&h.UpperArm is int upper&&h.Forearm is int lower&&Valid(upper)&&Valid(lower)&&Valid(h.Wrist)
+            &&upper!=lower&&lower!=h.Wrist&&rig.DescendsFrom(lower,upper)&&rig.DescendsFrom(h.Wrist,lower)).ToArray();
         var scale=1f;
         if(arms.Length>0)
         {

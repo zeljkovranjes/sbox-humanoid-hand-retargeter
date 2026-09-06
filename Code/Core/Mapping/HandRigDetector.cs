@@ -261,9 +261,9 @@ public static class HandRigDetector
             IsTip = Has("tip", "end", "nub", "endmarker") || hint?.Role.EndsWith("Tip",StringComparison.Ordinal)==true;
             bool DigitName(params string[] aliases) => Has(aliases)
                 || aliases.Any(a => Core.EndsWith(a, StringComparison.Ordinal) || Core.EndsWith(a + "finger", StringComparison.Ordinal));
-            Digit = DigitName("thumb") ? DigitRole.Thumb : DigitName("index", "forefinger") ? DigitRole.Index
+            Digit = DigitName("thumb") ? DigitRole.Thumb : DigitName("index", "forefinger", "point", "pointer", "pointing") ? DigitRole.Index
                 : DigitName("middle", "mid") ? DigitRole.Middle : DigitName("ring") ? DigitRole.Ring
-                : DigitName("pinky", "pinkie", "little") ? DigitRole.Pinky : null;
+                : DigitName("pinky", "pinkie", "pink", "little") ? DigitRole.Pinky : null;
             if(hint is not null && HandDetectionProfiles.IsDigit(hint.Role))
                 Digit=Enum.GetValues<DigitRole>().First(d=>hint.Role.StartsWith(d.ToString(),StringComparison.Ordinal));
             IsWrist = !IsHelper && !IsNonHandTrack && !IsTip && Digit is null

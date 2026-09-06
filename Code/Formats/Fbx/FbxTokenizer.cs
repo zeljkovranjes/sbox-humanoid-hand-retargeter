@@ -91,6 +91,8 @@ public static class FbxTokenizer
 
         if (root.Children.Count == 0)
             throw new FormatException($"FBX binary: no nodes found after header (offset {pos}).");
+        if (data.Length - pos >= 16)
+            root.FooterWatermark = data.AsSpan(pos, 16).ToArray();
         return root;
     }
 
@@ -132,6 +134,7 @@ public static class FbxTokenizer
 
         // Remaining bytes up to endOffset are nested children plus a trailing NULL record.
         int end = (int)endOffset;
+        node.HasChildScope = pos < end;
         while (pos < end)
         {
             if (end - pos < sentinelSize)
@@ -161,7 +164,13 @@ public static class FbxTokenizer
         switch (code)
         {
             case 'Y': return BinaryPrimitives.ReadInt16LittleEndian(ReadBytes(data, ref pos, 2));
-            case 'C': return (ReadU8(data, ref pos) & 1) == 1;
+            case 'C':
+            {
+                // Older exporters also use C for character enums (e.g. Shading='T').
+                // Preserve those bytes so repairing transforms cannot alter mesh flags.
+                var value = ReadU8(data, ref pos);
+                return value <= 1 ? (object)(value == 1) : value;
+            }
             case 'I': return BinaryPrimitives.ReadInt32LittleEndian(ReadBytes(data, ref pos, 4));
             case 'F': return BinaryPrimitives.ReadSingleLittleEndian(ReadBytes(data, ref pos, 4));
             case 'D': return BinaryPrimitives.ReadDoubleLittleEndian(ReadBytes(data, ref pos, 8));

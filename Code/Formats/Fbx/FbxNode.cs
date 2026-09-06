@@ -9,7 +9,7 @@ namespace HumanoidHandRetargeter.Formats.Fbx;
 ///
 /// Property values are stored as the closest CLR type to what the file contained:
 /// <list type="bullet">
-///   <item><c>short</c> ('Y'), <c>bool</c> ('C'), <c>int</c> ('I'), <c>float</c> ('F'),
+///   <item><c>short</c> ('Y'), <c>bool</c> or character <c>byte</c> ('C'), <c>int</c> ('I'), <c>float</c> ('F'),
 ///         <c>double</c> ('D'), <c>long</c> ('L')</item>
 ///   <item><c>float[]</c> ('f'), <c>double[]</c> ('d'), <c>long[]</c> ('l'),
 ///         <c>int[]</c> ('i'), <c>bool[]</c>-as-<c>byte[]</c> ('b')</item>
@@ -24,6 +24,9 @@ public sealed class FbxNode
     public string Name { get; }
     public List<object> Properties { get; } = new();
     public List<FbxNode> Children { get; } = new();
+    public bool HasChildScope { get; set; }
+    // Document metadata retained when repairing binary FBX files.
+    public byte[]? FooterWatermark { get; set; }
 
     public FbxNode(string name) => Name = name;
 

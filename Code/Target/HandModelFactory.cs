@@ -5,7 +5,7 @@ namespace HumanoidHandRetargeter.Target;
 public static class HandModelFactory
 {
     public const string Header = "<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:modeldoc30:version{8c2d7a91-9c42-4bf0-883a-5a3b1762d4f1} -->";
-    public static string Create(string baseModel = "", string mesh = "", float meshUnitScaleCm = 1, IReadOnlyDictionary<string,string>? materialRemaps = null)
+    public static string Create(string baseModel = "", string mesh = "", float meshUnitScaleCm = 1, IReadOnlyDictionary<string,string>? materialRemaps = null, IReadOnlyList<string>? meshNames = null)
     {
         if (!float.IsFinite(meshUnitScaleCm) || meshUnitScaleCm <= 0) throw new ArgumentOutOfRangeException(nameof(meshUnitScaleCm));
         if (string.IsNullOrWhiteSpace(baseModel) == string.IsNullOrWhiteSpace(mesh)) throw new ArgumentException("Choose one base model or mesh source.");
@@ -18,6 +18,12 @@ public static class HandModelFactory
                 ["filename"] = new KvString(mesh), ["import_scale"] = new KvDouble(meshUnitScaleCm),
                 ["import_translation"] = Vector(0,0,0), ["import_rotation"] = Vector(0,0,0),
                 ["align_origin_x_type"] = new KvString("None"), ["align_origin_y_type"] = new KvString("None"), ["align_origin_z_type"] = new KvString("None") });
+            if(meshNames is {Count:>0})
+            {
+                var names=new KvArray();foreach(var name in meshNames)names.Items.Add(new KvString(name));
+                ((KvObject)meshes.Items[0])["import_filter"]=new KvObject
+                    {["exclude_by_default"]=new KvBool(true),["exception_list"]=names};
+            }
             children.Items.Add(new KvObject { ["_class"] = new KvString("RenderMeshList"), ["children"] = meshes });
             children.Items.Add(new KvObject { ["_class"] = new KvString("BoneMarkupList"), ["bone_cull_type"] = new KvString("None"), ["children"] = new KvArray() });
             var remaps=new KvArray();
