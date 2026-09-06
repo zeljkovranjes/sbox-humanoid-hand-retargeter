@@ -81,6 +81,7 @@ public sealed class HandRetargetWindow : Widget
             :path.Equals(HandEditorPipeline.CitizenArms,StringComparison.OrdinalIgnoreCase)?1
             :path.EndsWith(".fbx",StringComparison.OrdinalIgnoreCase)?3:2;
         LastBake=Array.Empty<HandBakedClip>();
+        report.Text=string.Join("\n",Target.ImportNotes);
         status.Text="Target: "+System.IO.Path.GetFileName(path)+(Target.Mapping.NeedsReview?" — confirm Target Mapping":"");
     });
     public Task AddFilesAsync(IEnumerable<string> paths)=>Run(async token=>{
@@ -125,7 +126,7 @@ public sealed class HandRetargetWindow : Widget
         var result=await HandEditorPipeline.ExportWithReportAsync(target,clips,output.Text,graph.Value,backup.Value,weapon.Value,companion.Value,token);
         await HandEditorPipeline.MainThread();status.Text=$"Done: {clips.Count} clip(s) → {result.ModelPath}";
         if(result.WeaponPrefabs is {Count:>0})status.Text+=$"\nCreated {result.WeaponPrefabs.Count} weapon prefab(s). Paths are under Show details.";
-        report.Text=string.Join("\n",result.Changes.Concat(clips.SelectMany(c=>c.Notes)).Distinct())+(result.BackupPath is null?"":"\nBackup: "+result.BackupPath)+(companion.Value?"\nOriginal weapon/camera/IK tracks saved in the source_tracks folder.":"");
+        report.Text=string.Join("\n",result.Changes.Concat(target.ImportNotes).Concat(clips.SelectMany(c=>c.Notes)).Distinct())+(result.BackupPath is null?"":"\nBackup: "+result.BackupPath)+(companion.Value?"\nOriginal weapon/camera/IK tracks saved in the source_tracks folder.":"");
         report.Visible=false;details.Text="Show details";details.Visible=true;
     }
     void ToggleDetails(){report.Visible=!report.Visible;details.Text=report.Visible?"Hide details":"Show details";}

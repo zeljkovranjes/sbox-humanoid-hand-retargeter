@@ -11,7 +11,10 @@ namespace HumanoidHandRetargeter.Editor;
 public static class FbxMaterialAssets
 {
     public sealed record TextureFile(string Reference,byte[] Bytes,string Extension);
-    public sealed record Prepared(IReadOnlyList<FbxMaterialReader.SourceMaterialInfo> Materials,IReadOnlyDictionary<string,TextureFile> Textures,string Signature);
+    public sealed record Prepared(IReadOnlyList<FbxMaterialReader.SourceMaterialInfo> Materials,IReadOnlyDictionary<string,TextureFile> Textures,string Signature)
+    {
+        public IReadOnlyList<string> Notes { get; init; } = Array.Empty<string>();
+    }
     static readonly string[] Extensions={".png",".tga",".jpg",".jpeg",".dds",".webp"};
 
     public static Prepared Inspect(string source,byte[] bytes)
@@ -28,19 +31,28 @@ public static class FbxMaterialAssets
                 embedded[Path.GetFileName(name.Replace('\\','/'))]=content;
         }
         var directory=Path.GetDirectoryName(Path.GetFullPath(source))!;
-        var candidates=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        void AddFolder(string folder,bool recursive)
+        var candidates=new Dictionary<string,int>(StringComparer.OrdinalIgnoreCase);
+        var notes=new List<string>();
+        void AddFolder(string folder,bool recursive,int priority)
         {
             if(!Directory.Exists(folder))return;
             foreach(var path in Directory.EnumerateFiles(folder,"*",recursive?SearchOption.AllDirectories:SearchOption.TopDirectoryOnly))
-                if(Extensions.Contains(Path.GetExtension(path),StringComparer.OrdinalIgnoreCase))candidates.Add(path);
+                if(Extensions.Contains(Path.GetExtension(path),StringComparer.OrdinalIgnoreCase))candidates.TryAdd(path,priority);
         }
-        AddFolder(directory,false);
+        AddFolder(directory,false,0);
         var ancestor=new DirectoryInfo(directory);
         for(var depth=0;depth<3&&ancestor is not null;depth++,ancestor=ancestor.Parent)
-            foreach(var name in new[]{"Textures","textures",Path.GetFileNameWithoutExtension(source)+".fbm"})AddFolder(Path.Combine(ancestor.FullName,name),true);
+        {
+            if(depth==1)AddFolder(ancestor.FullName,false,depth*2);
+            foreach(var name in new[]{"Textures","textures",Path.GetFileNameWithoutExtension(source)+".fbm"})AddFolder(Path.Combine(ancestor.FullName,name),true,depth*2+1);
+        }
+        if(materials.Count==1&&string.IsNullOrWhiteSpace(materials[0].ColorTexture)&&!materials[0].VertexColors)
+        {
+            var colors=candidates.Keys.Where(IsColorCandidate).ToArray();
+            if(colors.Length==1)materials[0].ColorTexture=colors[0];
+        }
         var textures=new Dictionary<string,TextureFile>(StringComparer.OrdinalIgnoreCase);
-        foreach(var reference in materials.SelectMany(References).Where(p=>!string.IsNullOrWhiteSpace(p)).Select(p=>p!).Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach(var reference in materials.SelectMany(References).Where(p=>!string.IsNullOrWhiteSpace(p)).Select(p=>p!).Distinct(StringComparer.OrdinalIgnoreCase).ToArray())
         {
             var normalized=reference.Replace('\\','/');var fileName=Path.GetFileName(normalized);byte[] data;string extension;
             if(embedded.TryGetValue(fileName,out var payload)){data=payload;extension=Path.GetExtension(fileName).ToLowerInvariant();}
@@ -50,9 +62,38 @@ public static class FbxMaterialAssets
                 string? resolved=File.Exists(direct)&&Extensions.Contains(Path.GetExtension(direct),StringComparer.OrdinalIgnoreCase)?direct:null;
                 if(resolved is null)
                 {
-                    var exact=candidates.Where(p=>Path.GetFileName(p).Equals(fileName,StringComparison.OrdinalIgnoreCase)).ToArray();
-                    var matches=exact.Length>0?exact:candidates.Where(p=>Path.GetFileNameWithoutExtension(p).Equals(Path.GetFileNameWithoutExtension(fileName),StringComparison.OrdinalIgnoreCase)).ToArray();
-                    if(matches.Length==0)throw new FileNotFoundException($"Missing authored texture '{reference}'. Place it in a Textures folder beside the FBX or its parent folder before importing.");
+                    var exact=candidates.Keys.Where(p=>Path.GetFileName(p).Equals(fileName,StringComparison.OrdinalIgnoreCase)).ToArray();
+                    var matches=exact.Length>0?exact:candidates.Keys.Where(p=>Path.GetFileNameWithoutExtension(p).Equals(Path.GetFileNameWithoutExtension(fileName),StringComparison.OrdinalIgnoreCase)).ToArray();
+                    var isColor=materials.Any(m=>string.Equals(m.ColorTexture,reference,StringComparison.OrdinalIgnoreCase));
+                    if(matches.Length==0&&isColor&&materials.Count==1)
+                        matches=candidates.Keys.Where(IsColorCandidate).ToArray();
+                    if(matches.Length==0&&!isColor&&materials.Count==1)
+                    {
+                        var material=materials[0];
+                        var channel=material.NormalTexture==reference?"normal":material.RoughnessTexture==reference?"roughness"
+                            :material.MetalnessTexture==reference?"metalness":material.OcclusionTexture==reference?"occlusion"
+                            :material.EmissiveTexture==reference?"emissive":"opacity";
+                        matches=candidates.Keys.Where(p=>TextureChannel(p)==channel).ToArray();
+                    }
+                    if(matches.Length==0)
+                    {
+                        if(isColor)throw new FileNotFoundException($"Missing color texture '{reference}'. Place its image beside the FBX or in a textures folder beside the FBX or its parent folder.");
+                        if(materials.Any(m=>m.OpacityTexture==reference))throw new FileNotFoundException($"Missing opacity texture '{reference}'. Supply the authored image to preserve transparency.");
+                        notes.Add($"Optional texture '{reference}' was not supplied; using a neutral material default.");
+                        // Missing auxiliary maps use the material writer's neutral defaults.
+                        foreach(var material in materials)
+                        {
+                            if(material.NormalTexture==reference)material.NormalTexture=null;
+                            if(material.RoughnessTexture==reference)material.RoughnessTexture=null;
+                            if(material.MetalnessTexture==reference)material.MetalnessTexture=null;
+                            if(material.OcclusionTexture==reference)material.OcclusionTexture=null;
+                            if(material.EmissiveTexture==reference)material.EmissiveTexture=null;
+                            if(material.OpacityTexture==reference)material.OpacityTexture=null;
+                        }
+                        continue;
+                    }
+                    var priority=matches.Min(p=>candidates[p]);
+                    matches=matches.Where(p=>candidates[p]==priority).OrderBy(p=>p,StringComparer.OrdinalIgnoreCase).ToArray();
                     var distinct=matches.GroupBy(p=>Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(p)))).ToArray();
                     if(distinct.Length!=1)throw new InvalidOperationException($"Multiple different textures match '{reference}'. Keep one matching file beside the FBX to resolve the ambiguity.");
                     resolved=matches[0];
@@ -64,9 +105,26 @@ public static class FbxMaterialAssets
         }
         using var hash=IncrementalHash.CreateHash(HashAlgorithmName.SHA256);hash.AppendData(bytes);
         foreach(var pair in textures.OrderBy(p=>p.Key,StringComparer.Ordinal)){hash.AppendData(Encoding.UTF8.GetBytes(pair.Key));hash.AppendData(pair.Value.Bytes);}
-        return new(materials,textures,Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant()[..16]);
+        return new(materials,textures,Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant()[..16]){Notes=notes};
     }
     static IEnumerable<string?> References(FbxMaterialReader.SourceMaterialInfo material)
         =>new[]{material.ColorTexture,material.NormalTexture,material.RoughnessTexture,material.MetalnessTexture,material.OcclusionTexture,material.EmissiveTexture,material.OpacityTexture};
+
+    static bool IsColorCandidate(string path)
+        =>TextureChannel(path)=="color";
+
+    // Common map suffixes shared with humanoid-retargeter's sidecar matching.
+    static string TextureChannel(string path)
+    {
+        var tokens=System.Text.RegularExpressions.Regex.Split(Path.GetFileNameWithoutExtension(path).ToLowerInvariant(),"[^a-z0-9]+");
+        if(tokens.Any(t=>t is "n" or "nm" or "nrm" or "nor" or "norm" or "normal" or "normalmap" or "bump"))return "normal";
+        if(tokens.Any(t=>t is "r" or "rough" or "roughness"))return "roughness";
+        if(tokens.Any(t=>t is "m" or "metal" or "metallic" or "metalness"))return "metalness";
+        if(tokens.Any(t=>t is "ao" or "occlusion" or "ambientocclusion"))return "occlusion";
+        if(tokens.Any(t=>t is "e" or "emissive" or "emission" or "glow"))return "emissive";
+        if(tokens.Any(t=>t is "a" or "alpha" or "opacity" or "trans" or "transparency"))return "opacity";
+        if(tokens.Any(t=>t is "height" or "displacement" or "orm" or "mask" or "g" or "gloss" or "glossiness"))return "other";
+        return "color";
+    }
 
 }

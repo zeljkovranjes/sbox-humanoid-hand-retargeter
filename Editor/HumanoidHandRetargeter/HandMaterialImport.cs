@@ -47,12 +47,44 @@ public static class HandMaterialImport
                 if(material.MetalnessTexture is not null){text.AppendLine("F_METALNESS_TEXTURE 1");Texture("TextureMetalness",material.MetalnessTexture);}
                 if(material.EmissiveTexture is not null){text.AppendLine("F_SELF_ILLUM 1");Texture("TextureSelfIllumMask",material.EmissiveTexture);}
                 if(material.DoubleSided)text.AppendLine("F_RENDER_BACKFACES 1");
-                if(material.OpacityTexture is not null){text.AppendLine("F_TRANSLUCENT 1");Texture("TextureTranslucency",material.OpacityTexture);}
+                var opacity=material.OpacityTexture is {} opacityReference?paths[opacityReference]:null;
+                var colorPath=material.ColorTexture is {} colorReference?paths[colorReference]:null;
+                if((material.AlphaTest||material.Translucent)&&opacity is null)opacity=colorPath;
+                if(opacity is not null&&string.Equals(opacity,colorPath,StringComparison.OrdinalIgnoreCase))opacity=ExtractPackedAlpha(opacity);
+                if(opacity is not null)
+                {
+                    if(material.AlphaTest)
+                    {
+                        text.AppendLine("F_ALPHA_TEST 1");
+                        text.AppendLine(FormattableString.Invariant($"g_flAlphaTestReference {material.AlphaCutoff:R}"));
+                    }
+                    else text.AppendLine("F_TRANSLUCENT 1");
+                    text.AppendLine("TextureTranslucency \""+opacity+"\"");
+                }
                 if(material.ColorTexture is null && material.ColorFactor is {} color)text.AppendLine(FormattableString.Invariant($"g_vColorTint \"[{color.X:R} {color.Y:R} {color.Z:R} 1]\""));
                 text.AppendLine("}");File.WriteAllText(absolute,text.ToString());
             }
             AssetSystem.RegisterFile(absolute);remaps.Add(material.Name.ToLowerInvariant()+".vmat",path);
         }
         return remaps;
+    }
+
+    // Same packed-alpha handling as humanoid-retargeter: complex.shader expects
+    // grayscale opacity, not the RGB channels of a packed color texture.
+    static string? ExtractPackedAlpha(string relative)
+    {
+        using var bitmap=SkiaSharp.SKBitmap.Decode(Path.Combine(HandEditorPipeline.Assets,relative))
+            ??throw new InvalidOperationException("Cannot decode packed opacity texture '"+relative+"'. Supply a PNG export.");
+        var pixels=bitmap.Pixels;
+        if(pixels.All(p=>p.Alpha==255))return null;
+        using var mask=new SkiaSharp.SKBitmap(bitmap.Width,bitmap.Height,SkiaSharp.SKColorType.Rgba8888,SkiaSharp.SKAlphaType.Opaque);
+        mask.Pixels=pixels.Select(p=>new SkiaSharp.SKColor(p.Alpha,p.Alpha,p.Alpha)).ToArray();
+        using var image=SkiaSharp.SKImage.FromBitmap(mask);
+        using var data=image.Encode(SkiaSharp.SKEncodedImageFormat.Png,100);
+        var output=relative+"_alpha.png";
+        var absolute=Path.Combine(HandEditorPipeline.Assets,output);
+        if(!File.Exists(absolute))File.WriteAllBytes(absolute,data.ToArray());
+        AssetSystem.RegisterFile(absolute);
+        return output;
     }
 }

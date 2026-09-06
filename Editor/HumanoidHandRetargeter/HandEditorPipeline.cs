@@ -34,6 +34,7 @@ public sealed class HandSource
 
 public sealed class HandTarget
 {
+    public IReadOnlyList<string> ImportNotes { get; init; } = Array.Empty<string>();
     public required string ModelPath { get; init; }
     public required Skel Skeleton { get; init; }
     public required HandMappingResult Mapping { get; set; }
@@ -76,13 +77,14 @@ public static class HandEditorPipeline
     public static async Task<HandTarget> LoadTargetAsync(string path, CancellationToken cancel = default)
     {
         await MainThread();
-        if (path.EndsWith(".fbx",StringComparison.OrdinalIgnoreCase)) path = await PrepareMeshAsync(path,cancel);
+        var importNotes=new List<string>();
+        if (path.EndsWith(".fbx",StringComparison.OrdinalIgnoreCase)) path = await PrepareMeshAsync(path,cancel,importNotes);
         path = ModelPath(path);
         var model = Model.Load(path);
         if (model is null || model.IsError || model.BoneCount == 0) throw new InvalidOperationException($"Cannot load a skinned model from '{path}'.");
         ValidateMaterials(model);
         var skeleton = ReadSkeleton(model);
-        return new HandTarget { ModelPath=path, Skeleton=skeleton, PalmFrames=HandPresetStore.LoadPalms(skeleton), Mapping=HandPresetStore.Load(skeleton) ?? HandRigDetector.Detect(skeleton) };
+        return new HandTarget { ImportNotes=importNotes, ModelPath=path, Skeleton=skeleton, PalmFrames=HandPresetStore.LoadPalms(skeleton), Mapping=HandPresetStore.Load(skeleton) ?? HandRigDetector.Detect(skeleton) };
     }
 
     public static async Task<HandSource> LoadSourceAsync(string path, float fps = 30, CancellationToken cancel = default)
@@ -265,14 +267,15 @@ public static class HandEditorPipeline
         return 1f/(2.54f*scale);
     }
 
-    private static async Task<string> PrepareMeshAsync(string file, CancellationToken cancel)
+    private static async Task<string> PrepareMeshAsync(string file, CancellationToken cancel,List<string> importNotes)
     {
         var bytes=File.ReadAllBytes(file);
         var materials=await Task.Run(()=>FbxMaterialAssets.Inspect(file,bytes),cancel);
+        importNotes.AddRange(materials.Notes);
         var hash=materials.Signature;
-        var folder="models/hand_retargeter/targets/"+SafeName(System.IO.Path.GetFileNameWithoutExtension(file))+"_"+hash+"_rig3";
+        var folder="models/hand_retargeter/targets/"+SafeName(System.IO.Path.GetFileNameWithoutExtension(file))+"_"+hash+"_rig4";
         var mesh=folder+"/hands.fbx"; var model=folder+"/hands.vmdl";
-        var scene=await Task.Run(()=>FbxImporter.Import(bytes),cancel);
+        var scene=await Task.Run(()=>FbxImporter.Import(bytes,new(){SampleFps=(float)FbxScene.Build(FbxTokenizer.Parse(bytes)).FrameRate}),cancel);
         await MainThread();
         var meshAbs=System.IO.Path.Combine(Assets,mesh); Directory.CreateDirectory(System.IO.Path.GetDirectoryName(meshAbs)!);
         if(!File.Exists(meshAbs)) File.WriteAllBytes(meshAbs,bytes);
@@ -286,7 +289,23 @@ public static class HandEditorPipeline
             var rig=Skel.Create(scene.Skeleton.Bones.Select(b=>new BoneDefinition(EngineName(b.Name),b.ParentIndex<0?null:EngineName(scene.Skeleton[b.ParentIndex].Name),b.RestLocal)).ToArray());
             var bindPath=folder+"/mesh_bind.dmx";
             File.WriteAllText(System.IO.Path.Combine(Assets,bindPath),DmxWriter.Write(rig,new Clip("bindPose",30,false,new(){Pose.Rest(rig).Locals}),new(){Name="bindPose",UpAxisY=scene.UpAxis==1}));
-            var prepared=VmdlSetupService.Prepare(HandModelFactory.Create(mesh:mesh,meshUnitScaleCm:scene.UnitScaleCm,materialRemaps:remaps),Array.Empty<HandAnimationEntry>(),new(){ModelPath=model,BindPoseSource=bindPath,AutoConfigureAnimGraph=false});
+            var entries=new List<HandAnimationEntry>();
+            var names=new HashSet<string>(StringComparer.OrdinalIgnoreCase){"bindPose"};
+            for(var i=0;i<scene.Clips.Count;i++)
+            {
+                cancel.ThrowIfCancellationRequested();
+                var clip=scene.Clips[i];
+                var stem=SafeName(clip.Name).Replace('-','_');
+                var name=stem;var suffix=2;
+                while(!names.Add(name))name=stem+"_"+suffix++;
+                var path=folder+"/embedded_"+i+".dmx";
+                // Imported locals are already centimeters, matching mesh_bind and the
+                // model's final unit conversion. Preserve authored takes without IK.
+                File.WriteAllText(System.IO.Path.Combine(Assets,path),DmxWriter.Write(rig,clip,new(){Name=name,UpAxisY=scene.UpAxis==1}));
+                AssetSystem.RegisterFile(System.IO.Path.Combine(Assets,path));
+                entries.Add(new(name,path,clip.Looping));
+            }
+            var prepared=VmdlSetupService.Prepare(HandModelFactory.Create(mesh:mesh,meshUnitScaleCm:scene.UnitScaleCm,materialRemaps:remaps),entries,new(){ModelPath=model,BindPoseSource=bindPath,AutoConfigureAnimGraph=false});
             File.WriteAllText(modelAbs,prepared.VmdlText);
             AssetSystem.RegisterFile(System.IO.Path.Combine(Assets,bindPath));
         }
