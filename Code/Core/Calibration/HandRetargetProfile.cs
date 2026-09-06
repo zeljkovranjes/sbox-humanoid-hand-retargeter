@@ -18,6 +18,7 @@ public sealed class HandRetargetProfile
     internal DigitDistribution[] Distributions { get; }
     internal (int Source,int Target)[] PreservedTracks {get;private set;}=Array.Empty<(int,int)>();
     internal WristMotionPair[] WristMotion { get; private set; } = Array.Empty<WristMotionPair>();
+    internal IReadOnlyDictionary<int,Vector3> FpsShoulders {get;private set;}=new Dictionary<int,Vector3>();
 
     private HandRetargetProfile(SkeletonModel source, SkeletonModel target, List<RotationPair> pairs,
         List<DigitDistribution> distributions, List<string> notes)
@@ -172,7 +173,7 @@ public sealed class HandRetargetProfile
             preserved.Add((index,bone.Index));
         }
         if(preserved.Count>0)notes.Add($"Preserved {preserved.Count} compatible non-hand tracks; target deformation helpers remain target-owned.");
-        return new(source, target, pairs, distributions, notes) { WristMotion = wristMotion.ToArray(), PreservedTracks=preserved.ToArray() };
+        return new(source, target, pairs, distributions, notes) { WristMotion = wristMotion.ToArray(), PreservedTracks=preserved.ToArray(), FpsShoulders=HandViewSpace.FreeShoulderPositions(target,targetMap) };
 
         bool Palm(SkeletonModel skeleton, HandRigDefinition hand, IReadOnlyDictionary<HandSide, Quaternion>? overrides, string label, out Quaternion frame)
         {

@@ -76,6 +76,8 @@ public static class HandRetargeter
 
     private static void ApplyWristMotion(HandRetargetProfile profile, Pose source, Pose target, HandMotionOptions options)
     {
+        if(options.WeaponSpaceOffset.HasValue&&options.SolveArmIk)
+            foreach(var shoulder in profile.FpsShoulders)target.Locals[shoulder.Key].Pos=shoulder.Value;
         var sourceWorld = source.ToWorld(profile.Source);
         foreach (var pair in profile.WristMotion)
         {
