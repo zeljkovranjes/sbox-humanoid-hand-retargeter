@@ -96,6 +96,15 @@ public static class HandRetargeter
             {
                 if(options.WeaponSpaceOffset.HasValue)
                 {
+                    // Detached FPS arms can move their open shoulder ends. Avoid
+                    // folding long/thick forearms back through their own upper arm
+                    // when the weapon grip lies very close to the shoulder.
+                    if(profile.Target[upper].ParentIndex<0)
+                    {
+                        var shoulder=HandViewSpace.ClearElbowFold(world[upper].Pos,world[lower].Pos,world[pair.Target].Pos,desired);
+                        target.Locals[upper].Pos=shoulder;
+                        world=target.ToWorld(profile.Target);
+                    }
                     // FPS arm meshes have free shoulder ends. Move the shoulder enough
                     // to reach the fixed weapon grip instead of stretching either arm segment.
                     var reach=Vector3.Distance(world[upper].Pos,world[lower].Pos)+Vector3.Distance(world[lower].Pos,world[pair.Target].Pos);

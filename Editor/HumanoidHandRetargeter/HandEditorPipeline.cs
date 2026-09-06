@@ -232,6 +232,15 @@ public static class HandEditorPipeline
             }
             if(!await CompileAsync(absolute,token)) return false;
             await MainThread(); var model=Model.Load(outputModel);
+            // The compiled file can arrive before an already-loaded model refreshes
+            // its sequence list. Re-exporting changed motion adds a preserved-name
+            // suffix, so wait for those new sequences before validating the bake.
+            var modelDeadline=DateTime.UtcNow.AddSeconds(15);
+            while(model is not null&&!model.IsError&&!prepared.Animations.All(a=>model.AnimationNames.Contains(a.SequenceName))
+                &&DateTime.UtcNow<modelDeadline)
+            {
+                await Task.Delay(50,token);await MainThread();model=Model.Load(outputModel);
+            }
             if(model is null || model.IsError || !prepared.Animations.All(a=>model.AnimationNames.Contains(a.SequenceName)))return false;
             if(prepared.GeneratedGraphPath is { } graphPath){var graph=AnimationGraph.Load(graphPath);if(graph is null||graph.IsError)return false;}
 

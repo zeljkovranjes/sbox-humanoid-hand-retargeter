@@ -8,6 +8,20 @@ using Vector3=System.Numerics.Vector3;
 /// <summary>A fixed eye origin shared by weapon-space baking and the preview, in centimeters.</summary>
 public static class HandViewSpace
 {
+    internal static Vector3 ClearElbowFold(Vector3 shoulder,Vector3 elbow,Vector3 wrist,Vector3 grip)
+    {
+        var upper=Vector3.Distance(shoulder,elbow);var lower=Vector3.Distance(elbow,wrist);
+        // An interior angle of 65 degrees leaves clearance at a sharply bent elbow.
+        // Move backward along the FPS view axis, preserving shoulder width/height
+        // and both segment lengths. The wrist remains constrained to the weapon.
+        var minimumSquared=upper*upper+lower*lower-2*upper*lower*MathF.Cos(65*MathF.PI/180);
+        var delta=grip-shoulder;
+        var back=MathF.Sqrt(MathF.Max(0,minimumSquared-delta.Y*delta.Y-delta.Z*delta.Z));
+        // Keep the open shoulder behind the grip even if it passes behind the
+        // original root; choosing a branch by distance alone would jump there.
+        return new Vector3(MathF.Min(shoulder.X,grip.X-back),shoulder.Y,shoulder.Z);
+    }
+
     internal static IReadOnlyDictionary<int,Vector3> FreeShoulderPositions(Skel rig,HandMappingResult mapping)
     {
         var result=new Dictionary<int,Vector3>();
