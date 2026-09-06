@@ -177,8 +177,12 @@ public static class HandEditorPipeline
         // A compiled target is in inches. Existing model scaling controls the animation
         // compiler's input units; new wrappers use the inherited cm-to-inch modifier.
         var factor = ExportPositionFactor(original);
-        Clip ExportUnits(Clip clip) => new(clip.Name,clip.Fps,clip.Looping,clip.Frames.Select(frame=>frame.Select(t=>new XForm(t.Pos*factor,t.Rot)).ToArray()).ToList(),clip.NativeFps);
-        var exportSkeleton = Skel.Create(target.Skeleton.Bones.Select(b=>new BoneDefinition(b.Name,b.ParentIndex<0?null:target.Skeleton[b.ParentIndex].Name,new XForm(b.RestLocal.Pos*factor,b.RestLocal.Rot))).ToArray());
+        var turn=ExportRootRotation(original);
+        XForm ExportLocal(XForm value,int bone)=>target.Skeleton[bone].ParentIndex<0
+            ?new XForm(Vec.Transform(value.Pos*factor,turn),Quat.Normalize(turn*value.Rot))
+            :new XForm(value.Pos*factor,value.Rot);
+        Clip ExportUnits(Clip clip) => new(clip.Name,clip.Fps,clip.Looping,clip.Frames.Select(frame=>frame.Select(ExportLocal).ToArray()).ToList(),clip.NativeFps);
+        var exportSkeleton = Skel.Create(target.Skeleton.Bones.Select(b=>new BoneDefinition(b.Name,b.ParentIndex<0?null:target.Skeleton[b.ParentIndex].Name,ExportLocal(b.RestLocal,b.Index))).ToArray());
         var bind = new Clip("bindPose",30,false,new() { Pose.Rest(exportSkeleton).Locals });
         files[folder+"/bind.dmx"] = DmxWriter.Write(exportSkeleton,bind,new() {Name="bindPose",UpAxisY=false,ForwardParity=1});
         foreach(var clip in clips)
@@ -267,13 +271,32 @@ public static class HandEditorPipeline
         return 1f/(2.54f*scale);
     }
 
+    private static Quat ExportRootRotation(string text)
+    {
+        var turn=false;
+        void Walk(KvValue value)
+        {
+            if(value is KvObject node)
+            {
+                if(node.GetString("_class")=="ModelModifier_ScaleAndMirror"
+                    &&node.GetOrNull("mirror_x") is KvBool {Value:true}
+                    &&node.GetOrNull("mirror_y") is KvBool {Value:true}
+                    &&node.GetOrNull("mirror_z") is not KvBool {Value:true})turn=!turn;
+                foreach(var key in node.Keys)Walk(node[key]);
+            }
+            else if(value is KvArray array)foreach(var child in array.Items)Walk(child);
+        }
+        Walk(Kv3.Parse(text).Root);
+        return turn?Quat.CreateFromAxisAngle(Vec.UnitZ,MathF.PI):Quat.Identity;
+    }
+
     private static async Task<string> PrepareMeshAsync(string file, CancellationToken cancel,List<string> importNotes)
     {
         var bytes=File.ReadAllBytes(file);
         var materials=await Task.Run(()=>FbxMaterialAssets.Inspect(file,bytes),cancel);
         importNotes.AddRange(materials.Notes);
         var hash=materials.Signature;
-        var folder="models/hand_retargeter/targets/"+SafeName(System.IO.Path.GetFileNameWithoutExtension(file))+"_"+hash+"_rig4";
+        var folder="models/hand_retargeter/targets/"+SafeName(System.IO.Path.GetFileNameWithoutExtension(file))+"_"+hash+"_rig5";
         var mesh=folder+"/hands.fbx"; var model=folder+"/hands.vmdl";
         var scene=await Task.Run(()=>FbxImporter.Import(bytes,new(){SampleFps=(float)FbxScene.Build(FbxTokenizer.Parse(bytes)).FrameRate}),cancel);
         await MainThread();
@@ -281,7 +304,8 @@ public static class HandEditorPipeline
         if(!File.Exists(meshAbs)) File.WriteAllBytes(meshAbs,bytes);
         var modelAbs=System.IO.Path.Combine(Assets,model);
         var remaps=HandMaterialImport.Write(materials,folder);
-        if(!File.Exists(modelAbs))
+        var isNew=!File.Exists(modelAbs);
+        if(isNew)
         {
             // Keep the full authored hierarchy before ModelDoc can cull unweighted
             // ancestors. The audited importer preview uses this same bind-source technique.
@@ -311,6 +335,36 @@ public static class HandEditorPipeline
         }
         AssetSystem.RegisterFile(meshAbs);
         if(!await CompileAsync(modelAbs,cancel)) throw new InvalidOperationException("The target FBX could not be compiled into a skinned model.");
+        if(isNew)
+        {
+            await MainThread();
+            var compiledRig=ReadSkeleton(Model.Load(model));
+            var fit=HandTargetFit.Analyze(compiledRig,HandRigDetector.Detect(compiledRig));
+            if(fit.Scale!=1||fit.TurnAround)
+            {
+                File.WriteAllText(modelAbs,fit.Apply(File.ReadAllText(modelAbs)));
+                if(!await CompileAsync(modelAbs,cancel))throw new InvalidOperationException("The fitted FPS target could not be compiled.");
+                // Resource compilation finishes before the loaded Model's bone cache
+                // refreshes. Never hand an old-size skeleton to a newly scaled mesh.
+                var deadline=DateTime.UtcNow.AddSeconds(15);
+                while(true)
+                {
+                    await Task.Delay(50,cancel);await MainThread();
+                    var loaded=ReadSkeleton(Model.Load(model));
+                    var ready=compiledRig.Bones.All(b=>
+                    {
+                        var index=loaded.IndexOf(b.Name);if(index<0)return false;
+                        var expected=compiledRig.RestWorld[b.Index].Pos*fit.Scale;
+                        if(fit.TurnAround)expected=new Vec(-expected.X,-expected.Y,expected.Z);
+                        return Vec.Distance(loaded.RestWorld[index].Pos,expected)<.02f;
+                    });
+                    if(ready)break;
+                    if(DateTime.UtcNow>=deadline)throw new InvalidOperationException("The fitted model is still reloading. Select the FBX again after asset compilation finishes.");
+                }
+                if(fit.Scale!=1)importNotes.Add($"Applied FPS import scale {fit.Scale:G} to the mesh and all embedded animations to correct the oversized or undersized export.");
+                if(fit.TurnAround)importNotes.Add("Turned the imported target 180 degrees to align its left and right shoulders with FPS weapon coordinates.");
+            }
+        }
         await MainThread(); return model;
     }
 
