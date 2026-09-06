@@ -29,6 +29,22 @@ public static class HandPresetStore
         try {
             var hands=JsonSerializer.Deserialize<Hand[]>(File.ReadAllText(path));if(hands is null)return null;
             var map=HandRigDetector.Detect(skeleton,hands.Select(h=>new HandRigDefinition(h.Side,h.Wrist,h.Digits.Select(d=>new DigitChain(d.Role,d.Segments,d.Metacarpal,d.Tip,d.ExtraSlot)),h.Clavicle,h.UpperArm,h.Forearm,h.Helpers)));
+            // Older versions let users confirm every numbered ray as an extra.
+            // Upgrade that placeholder only when automatic detection now identifies
+            // the exact same five chains. Keep explicit anatomical corrections.
+            var automatic=HandRigDetector.Detect(skeleton);
+            if(!automatic.NeedsReview&&LoadPalms(skeleton) is not {Count:>0})
+            {
+                var upgraded=map.Hands.Select(hand=>
+                {
+                    var detected=automatic.Hands.FirstOrDefault(h=>h.Side==hand.Side&&h.Wrist==hand.Wrist);
+                    return hand.Digits.Count==5&&hand.Digits.All(d=>d.Role==DigitRole.Extra)
+                        &&detected is not null&&detected.Digits.Select(d=>d.Role).Distinct().Count()==5
+                        &&!detected.Digits.Any(d=>d.Role==DigitRole.Extra)
+                        &&hand.Digits.All(d=>detected.Digits.Any(a=>a.Bones.SequenceEqual(d.Bones)))?detected:hand;
+                }).ToArray();
+                map=HandRigDetector.Detect(skeleton,upgraded);
+            }
             return map.NeedsReview?null:map;
         }
         catch(JsonException) { return null; }
