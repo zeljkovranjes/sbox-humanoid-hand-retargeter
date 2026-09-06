@@ -183,6 +183,18 @@ public static class HandRigDetector
         {
             foreach (var child in JointChildren(parent))
             {
+                // Some palm/metacarpal containers parent several different digits
+                // (notably thumb and index). They are shared anatomy, not a fork
+                // within one finger. Keep the container wrist-driven and map each
+                // named child chain independently so no bone is assigned twice.
+                var branches=JointChildren(child).Where(i=>!names[i].IsTip).ToArray();
+                if(names[child].IsMeta&&branches.Length>1
+                    &&branches.All(i=>names[i].Digit.HasValue)
+                    &&branches.Select(i=>names[i].Digit).Distinct().Count()==branches.Length)
+                {
+                    foreach(var branch in branches)yield return branch;
+                    continue;
+                }
                 if (!names[child].IsTip) yield return child;
             }
         }

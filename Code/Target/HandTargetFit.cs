@@ -19,12 +19,14 @@ public sealed record HandTargetFit(float Scale, bool TurnAround)
             var lengths=arms.Select(h=>Vector3.Distance(rig.RestWorld[h.UpperArm!.Value].Pos,rig.RestWorld[h.Forearm!.Value].Pos)
                 +Vector3.Distance(rig.RestWorld[h.Forearm!.Value].Pos,rig.RestWorld[h.Wrist].Pos)).ToArray();
             var length=lengths.Average();
-            // Leave ordinary proportions intact. Only correct gross decimal export
-            // scale differences, and require agreement between both sides.
-            if(float.IsFinite(length)&&length>1e-6f&&lengths.Max()/lengths.Min()<1.5f&&(length<15||length>150))
+            // Leave ordinary proportions intact. Test common metric and inch unit
+            // conversions rather than assuming every export error is a power of ten.
+            // Require agreement between both sides before changing the entire mesh.
+            if(float.IsFinite(length)&&length>1e-6f&&lengths.Max()/lengths.Min()<1.5f&&(length<25||length>85))
             {
-                var candidate=MathF.Pow(10,MathF.Round(MathF.Log10(55/length)));
-                if(length*candidate>=25&&length*candidate<=100)scale=candidate;
+                var factors=Enumerable.Range(-4,9).SelectMany(power=>new[]{1f,2.54f,1f/2.54f}.Select(unit=>unit*MathF.Pow(10,power)));
+                var candidate=factors.OrderBy(f=>MathF.Abs(MathF.Log(length*f/55))).First();
+                if(length*candidate>=35&&length*candidate<=85)scale=candidate;
             }
         }
         var left=arms.FirstOrDefault(h=>h.Side==HandSide.Left);

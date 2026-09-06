@@ -51,6 +51,22 @@ public static class FbxMaterialAssets
             var colors=candidates.Keys.Where(IsColorCandidate).ToArray();
             if(colors.Length==1)materials[0].ColorTexture=colors[0];
         }
+        if(materials.Count==1)
+        {
+            string? Sidecar(string channel)
+            {
+                var matches=candidates.Keys.Where(p=>TextureChannel(p)==channel).ToArray();
+                if(matches.Length==0)return null;
+                var nearest=matches.Min(p=>candidates[p]);
+                matches=matches.Where(p=>candidates[p]==nearest).ToArray();
+                return matches.Length==1?matches[0]:null;
+            }
+            var material=materials[0];
+            material.NormalTexture??=Sidecar("normal");
+            material.RoughnessTexture??=Sidecar("roughness");
+            material.MetalnessTexture??=Sidecar("metalness");
+            material.OcclusionTexture??=Sidecar("occlusion");
+        }
         var textures=new Dictionary<string,TextureFile>(StringComparer.OrdinalIgnoreCase);
         foreach(var reference in materials.SelectMany(References).Where(p=>!string.IsNullOrWhiteSpace(p)).Select(p=>p!).Distinct(StringComparer.OrdinalIgnoreCase).ToArray())
         {
@@ -116,7 +132,10 @@ public static class FbxMaterialAssets
     // Common map suffixes shared with humanoid-retargeter's sidecar matching.
     static string TextureChannel(string path)
     {
-        var tokens=System.Text.RegularExpressions.Regex.Split(Path.GetFileNameWithoutExtension(path).ToLowerInvariant(),"[^a-z0-9]+");
+        var stem=Path.GetFileNameWithoutExtension(path);
+        stem=System.Text.RegularExpressions.Regex.Replace(stem,"([a-z0-9])([A-Z])","$1 $2");
+        stem=System.Text.RegularExpressions.Regex.Replace(stem,"([A-Z])([A-Z][a-z])","$1 $2");
+        var tokens=System.Text.RegularExpressions.Regex.Split(stem.ToLowerInvariant(),"[^a-z0-9]+");
         if(tokens.Any(t=>t is "n" or "nm" or "nrm" or "nor" or "norm" or "normal" or "normalmap" or "bump"))return "normal";
         if(tokens.Any(t=>t is "r" or "rough" or "roughness"))return "roughness";
         if(tokens.Any(t=>t is "m" or "metal" or "metallic" or "metalness"))return "metalness";

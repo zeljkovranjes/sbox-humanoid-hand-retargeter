@@ -296,7 +296,7 @@ public static class HandEditorPipeline
         var materials=await Task.Run(()=>FbxMaterialAssets.Inspect(file,bytes),cancel);
         importNotes.AddRange(materials.Notes);
         var hash=materials.Signature;
-        var folder="models/hand_retargeter/targets/"+SafeName(System.IO.Path.GetFileNameWithoutExtension(file))+"_"+hash+"_rig5";
+        var folder="models/hand_retargeter/targets/"+SafeName(System.IO.Path.GetFileNameWithoutExtension(file))+"_"+hash+"_rig6";
         var mesh=folder+"/hands.fbx"; var model=folder+"/hands.vmdl";
         var scene=await Task.Run(()=>FbxImporter.Import(bytes,new(){SampleFps=(float)FbxScene.Build(FbxTokenizer.Parse(bytes)).FrameRate}),cancel);
         await MainThread();
