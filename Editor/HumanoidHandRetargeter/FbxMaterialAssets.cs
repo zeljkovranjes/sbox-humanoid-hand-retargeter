@@ -93,12 +93,13 @@ public static class FbxMaterialAssets
                     }
                     if(matches.Length==0)
                     {
-                        if(isColor)throw new FileNotFoundException($"Missing color texture '{reference}'. Place its image beside the FBX or in a textures folder beside the FBX or its parent folder.");
                         if(materials.Any(m=>m.OpacityTexture==reference))throw new FileNotFoundException($"Missing opacity texture '{reference}'. Supply the authored image to preserve transparency.");
-                        notes.Add($"Optional texture '{reference}' was not supplied; using a neutral material default.");
+                        notes.Add(isColor?$"Color texture '{reference}' was not supplied; using the authored material color or a neutral default."
+                            :$"Optional texture '{reference}' was not supplied; using a neutral material default.");
                         // Missing auxiliary maps use the material writer's neutral defaults.
                         foreach(var material in materials)
                         {
+                            if(string.Equals(material.ColorTexture,reference,StringComparison.OrdinalIgnoreCase))material.ColorTexture=null;
                             if(material.NormalTexture==reference)material.NormalTexture=null;
                             if(material.RoughnessTexture==reference)material.RoughnessTexture=null;
                             if(material.MetalnessTexture==reference)material.MetalnessTexture=null;
