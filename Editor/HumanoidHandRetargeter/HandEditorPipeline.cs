@@ -82,7 +82,7 @@ public static class HandEditorPipeline
         path = ModelPath(path);
         var model = Model.Load(path);
         if (model is null || model.IsError || model.BoneCount == 0) throw new InvalidOperationException($"Cannot load a skinned model from '{path}'.");
-        ValidateMaterials(model);
+
         var skeleton = ReadSkeleton(model);
         return new HandTarget { ImportNotes=importNotes, ModelPath=path, Skeleton=skeleton, PalmFrames=HandPresetStore.LoadPalms(skeleton), Mapping=HandPresetStore.Load(skeleton) ?? HandRigDetector.Detect(skeleton) };
     }
@@ -219,7 +219,7 @@ public static class HandEditorPipeline
                         ||!bundle.Actions.All(a=>owner.AnimationNames.Contains(a.Sequence)))throw new InvalidOperationException($"Weapon animation owner validation failed: bones {owner?.BoneCount}/{bundle.BoneCount}, meshes {owner?.MeshCount}, vertices {owner?.MeshInfo.TotalVertices}, triangles {owner?.MeshInfo.TotalTriangles}, graph error {graph?.IsError}, sequences {string.Join(",",owner?.AnimationNames??Array.Empty<string>())}.");
                     if(target.Skeleton.Bones.Any(b=>owner.Bones.GetBone(WeaponClipBuilder.HandPrefix+b.Name) is null))return false;
                 }
-                ValidateMaterials(Model.Load(bundle.WeaponPath));
+
                 if(!await CompileAsync(System.IO.Path.Combine(Assets,bundle.PrefabPath),token))throw new InvalidOperationException("Weapon prefab did not compile: "+bundle.PrefabPath);
                 await MainThread();
                 // The compiled file reaches disk before the editor's asset record updates.
@@ -234,7 +234,7 @@ public static class HandEditorPipeline
             await MainThread(); var model=Model.Load(outputModel);
             if(model is null || model.IsError || !prepared.Animations.All(a=>model.AnimationNames.Contains(a.SequenceName)))return false;
             if(prepared.GeneratedGraphPath is { } graphPath){var graph=AnimationGraph.Load(graphPath);if(graph is null||graph.IsError)return false;}
-            ValidateMaterials(model);
+
             var compiledRig=ReadSkeleton(model);
             using var sampler=new ModelSampler(model,compiledRig);
             var checkedBones=target.Mapping.Hands.SelectMany(h=>new int?[]{h.Clavicle,h.UpperArm,h.Forearm,h.Wrist}.Where(i=>i.HasValue).Select(i=>i!.Value).Concat(h.Digits.SelectMany(d=>d.Bones))).Distinct().ToArray();
@@ -399,19 +399,25 @@ public static class HandEditorPipeline
         return false;
     }
 
-    public static void ValidateMaterials(Model model)
+    public static bool HasMissingMaterials(Model model)
     {
         var materials=model.Materials.Concat(Enumerable.Range(0,model.MaterialGroupCount).SelectMany(group=>model.GetMaterials(group))).Distinct();
         foreach(var material in materials)
         {
-            if(material is null||material.IsError||material.ResourcePath.Equals("materials/error.vmat",StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("The model has a missing material. Import its material and texture dependencies before continuing.");
+            if(material is null||material.IsError||string.Equals(material.ResourcePath,"materials/error.vmat",StringComparison.OrdinalIgnoreCase))return true;
             foreach(var parameter in new[]{"g_tColor","g_tNormal","g_tRoughness","g_tMetalness","g_tAmbientOcclusion","g_tSelfIllumMask","g_tTranslucency","TextureColor","TextureNormal","TextureRoughness","TextureMetalness","TextureAmbientOcclusion","TextureSelfIllumMask","TextureTranslucency"})
-                if(material.GetTexture(parameter) is {IsError:true})throw new InvalidOperationException($"Material '{material.ResourcePath}' has a missing texture ({parameter}). Restore that texture before continuing.");
-            if(material.FirstTexture is {IsError:true})throw new InvalidOperationException($"Material '{material.ResourcePath}' has a missing texture.");
+                if(material.GetTexture(parameter) is {IsError:true})return true;
+            if(material.FirstTexture is {IsError:true})return true;
         }
+        return false;
     }
 
+    public static void ApplyPreviewMaterialFallback(SceneModel model)
+    {
+        // Incomplete visual dependencies must not prevent skeletal retargeting.
+        // Override this preview instance only; authored assets remain editable.
+        if(HasMissingMaterials(model.Model))model.SetMaterialOverride(Material.Load("materials/dev/reflectivity_50.vmat"));
+    }
     public static string ModelPath(string path)
     {
         if(path.EndsWith(".vmdl_c",StringComparison.OrdinalIgnoreCase))path=path[..^2];

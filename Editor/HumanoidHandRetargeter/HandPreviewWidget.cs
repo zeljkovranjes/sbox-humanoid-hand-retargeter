@@ -45,6 +45,7 @@ public sealed class HandPreviewWidget : SceneRenderingWidget
         new ScenePointLight(Scene.SceneWorld,new Vector3(120,100,120),600,Color.White*3.5f){ShadowsEnabled=false};
         new ScenePointLight(Scene.SceneWorld,new Vector3(-120,-100,90),600,Color.White*2f){ShadowsEnabled=false};
         var asset=Model.Load(target.ModelPath);model=new SceneModel(Scene.SceneWorld,asset,Transform.Zero){UseAnimGraph=false};
+        HandEditorPipeline.ApplyPreviewMaterialFallback(model);
         modelBones=target.Skeleton.Bones.Select(b=>asset.Bones.GetBone(b.Name)?.Index??-1).ToArray();
         bind=target.Skeleton.Bones.Select(b=>asset.Bones.GetBone(b.Name)?.LocalTransform??Transform.Zero).ToArray();
         framingBones=target.Mapping.Hands.SelectMany(h=>new int?[]{h.Clavicle,h.UpperArm,h.Forearm,h.Wrist}.Where(b=>b.HasValue).Select(b=>b!.Value).Concat(h.Digits.SelectMany(d=>d.Bones))).Distinct().ToArray();
@@ -70,9 +71,9 @@ public sealed class HandPreviewWidget : SceneRenderingWidget
     public void SetWeapon(string path)
     {
         var asset=Model.Load(path);if(asset is null||asset.IsError)throw new InvalidOperationException("Cannot load weapon model.");
-        HandEditorPipeline.ValidateMaterials(asset);
+
         weapon?.Delete();
-        weapon=new SceneModel(Scene.SceneWorld,asset,Transform.Zero){UseAnimGraph=false};ApplyCurrentFrame();
+        weapon=new SceneModel(Scene.SceneWorld,asset,Transform.Zero){UseAnimGraph=false};HandEditorPipeline.ApplyPreviewMaterialFallback(weapon);ApplyCurrentFrame();
     }
     protected override void PreFrame()
     {
