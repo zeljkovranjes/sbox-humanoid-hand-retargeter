@@ -22,3 +22,5 @@ Add the library to your s&box project and open the **Humanoid Hand Retargeter** 
 Generated weapon prefabs that use an existing AnimGraph still require the original weapon assets. Unrecognized or ambiguous rigs may need manual mapping.
 
 Package ident: `chomnr_humanoid_hand_retargeter`
+
+For editor scripting and LLM automation through sbox-mcp, use `HumanoidHandRetargeter.Editor.HandRetargetApi`. It provides JSON inspection, mapping overrides, dry runs, batch conversion, job status and cancellation. See [llms.txt](llms.txt) for requests, examples and output behavior.

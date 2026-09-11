@@ -1,0 +1,144 @@
+# Humanoid Hand Retargeter
+
+> s&box editor library for retargeting hand and arm animation onto custom FPS rigs. Package ident: chomnr_humanoid_hand_retargeter.
+
+## Automation entry point
+
+Public static type: `HumanoidHandRetargeter.Editor.HandRetargetApi`.
+Requires the library in an open s&box editor project. This is an editor API, not an HTTP server or a game runtime API. sbox-mcp is optional and installed separately.
+
+Call through sbox-mcp's `code_run_static_method` using `typeName`, `methodName`, and a positional `args` JSON array. Methods return a JSON string; parse that string inside the MCP result envelope.
+
+Methods:
+* `Describe()` returns API version, defaults, limits, operations and side effects.
+* `Submit(string requestJson)` validates a request and returns a queued job or an error.
+* `GetJob(string jobId)` returns status, stage, result and error.
+* `Cancel(string jobId)` requests cancellation. Continue polling for the final outcome.
+* `ListJobs()` lists retained jobs in this editor session.
+
+Example MCP tool arguments:
+```json
+{
+  "typeName": "HumanoidHandRetargeter.Editor.HandRetargetApi",
+  "methodName": "Submit",
+  "args": ["{\"version\":1,\"operation\":\"inspectSource\",\"path\":\"models/weapons/sbox_smg_mp5/v_mp5.vmdl\"}"]
+}
+```
+
+Poll using the returned jobId:
+```json
+{
+  "typeName": "HumanoidHandRetargeter.Editor.HandRetargetApi",
+  "methodName": "GetJob",
+  "args": ["JOB_ID"]
+}
+```
+
+## Workflow
+
+1. Call Describe to confirm availability and version.
+2. Submit inspectSource to discover exact clip names and bone mapping.
+3. Submit inspectTarget to inspect the desired target and mapping issues.
+4. If necessary, supply reviewed bone-name mappings and palm frames.
+5. Submit convert with dryRun=true to check calibration and baking without exporting.
+6. Submit convert with dryRun=false to export and validate the result in the engine.
+7. Use result.output.modelPath and result.output.weaponPrefabs. Never infer output filenames.
+
+The same public C# methods can be called directly by editor scripts. Lower-level typed APIs remain available in HandEditorPipeline: LoadSourceAsync, LoadTargetAsync, Calibrate, Bake and ExportWithReportAsync.
+
+## Requests
+
+All requests use version=1 (default). Property names are case insensitive; operation and clip names are case sensitive. Unknown fields are rejected. fps defaults to 30 and must be between 1 and 240.
+
+inspectSource:
+```json
+{"version":1,"operation":"inspectSource","path":"D:/Assets/Equip.fbx","fps":30}
+```
+Returns source path, model path when applicable, clips with timing, notes, and rig information.
+
+inspectTarget:
+```json
+{"version":1,"operation":"inspectTarget","path":"D:/Assets/Hands.fbx"}
+```
+Returns imported model path, import notes and rig information. FBX inspection creates a reusable imported copy and may compile assets. Original external files are not modified.
+
+convert:
+```json
+{
+  "version": 1,
+  "operation": "convert",
+  "target": "D:/Assets/Hands.fbx",
+  "sources": [
+    {"path":"models/weapons/sbox_smg_mp5/v_mp5.vmdl","clips":["Reload"]},
+    {"path":"D:/Assets/Equip.fbx","clips":["C4D Animation Take"]}
+  ],
+  "outputModel": "models/retargeted/my_hands.vmdl",
+  "fps": 30,
+  "dryRun": false,
+  "autoConfigureAnimGraph": true,
+  "backup": true,
+  "weaponCompatible": false,
+  "preserveSourceTracks": true,
+  "motion": {
+    "transferWristPosition": true,
+    "scaleWristTravel": true,
+    "solveArmIk": true,
+    "preserveWeaponGrip": true
+  }
+}
+```
+
+Use an empty or omitted clips array to select all takes in that source. Select exact names returned by inspectSource. Up to 64 sources and 256 selected clips per job. outputModel must be a normalized path relative to project Assets ending in .vmdl. Absolute FBX input paths are supported. VMDL sources and targets must be available to the current project.
+
+dryRun defaults to false. It performs loading, mapping, calibration and baking, but does not validate an exported model or graph. Imported target copies can still be created. outputModel is required even for dry runs.
+
+weaponCompatible is false for custom rigs. Set it true only for matching bone hierarchies intended for bonemerging onto the source weapon; incompatible names fail validation.
+
+Additional motion fields: weaponSpaceOffset is a centimeter vector {"x":0,"y":0,"z":0}; wristTravelBasis is a quaternion {"x":0,"y":0,"z":0,"w":1}. Omit these to use automatic calibration. Use finite values and normalized quaternions.
+
+## Mapping overrides
+
+Rig inspection returns bones, candidates, issues, needsReview, and a reusable mapping array. Each hand uses bone names, not indices:
+```json
+{
+  "side":"Left",
+  "wrist":"hand_l",
+  "upperArm":"upperarm_l",
+  "forearm":"lowerarm_l",
+  "clavicle":null,
+  "helpers":[],
+  "digits":[
+    {"role":"Thumb","segments":["thumb_01_l","thumb_02_l","thumb_03_l"],"metacarpal":null,"tip":null,"extraSlot":""}
+  ]
+}
+```
+This is a shape example, not a complete five-finger mapping. Include all intended digits. Roles: Thumb, Index, Middle, Ring, Pinky, Extra. An Extra digit needs its matching extraSlot. For omitted sides, automatic detection still runs. Overrides are per request and do not save UI presets.
+
+Set targetMapping on the request and mapping on each source. A supplied hand replaces automatic detection for that side, and still passes hierarchy validation. Do not invent sides or blindly accept ambiguous candidates. Errors with code mapping_required include inspection details.
+
+For palm calibration overrides, set targetPalmFrames on the request or palmFrames on a source: {"Left":{"x":0,"y":0,"z":0,"w":1}}. These are semantic world-space palm frames in that loaded skeleton's coordinates (X forward, Z dorsal). Supply frames derived from the actual geometry, not an identity quaternion as a guess.
+
+## Jobs and errors
+
+Statuses: queued, running, succeeded, failed, cancelled. Poll every 0.5 to 1 seconds while queued or running. A successful Submit only means the job was accepted. Only succeeded confirms completion. The stage string is descriptive progress, not a stable enum.
+
+Errors have code and message; mapping errors also have details. Codes: invalid_request, queue_full, job_not_found, mapping_required, operation_failed. Cancellation has a terminal cancelled status. Cancellation is cooperative; an export that commits before cancellation arrives can still succeed.
+
+Jobs execute serially to avoid competing editor asset writes. Up to eight pending jobs and 64 retained jobs. Requests are limited to one million characters. Jobs are in memory and disappear on assembly reload or editor restart. Completed jobs can be evicted; store their results. There is no automatic retry or persistent queue. Do not start overlapping UI conversions while API jobs are running.
+
+## Output behavior and limitations
+
+Existing VMDL sequences and authored settings are preserved. A changed clip can receive a suffixed sequence name rather than replace existing animation. Export reports include the actual changes and any backup. Export validation failures roll back the transaction; imported target copies may remain.
+
+Automatic AnimGraph setup uses the original weapon graph through a generated live-retargeting weapon prefab when available. It does not transplant a weapon's entire graph onto a differently named hand skeleton. Keep original weapon dependencies installed. FBX sources without weapon graphs cannot supply gameplay logic or weapon assets that were never in the file.
+
+Missing materials and textures do not block skeletal conversion. The UI preview can use a neutral material; exported assets still need their visual dependencies for the intended appearance. Some rigs require mapping or skin-weight adjustments; collision-free deformation for arbitrary meshes is not guaranteed.
+
+Cinema 4D Base-Human Palm and Digit11 through Digit53 conventions are supported, including the embedded C4D Animation Take in 1PSAEquipAK47.fbx. Add the FBX using Add Files in the UI to create its animation row; use it as a source, not a custom target mesh.
+
+## Source
+
+* [Repository](https://github.com/zeljkovranjes/sbox-humanoid-hand-retargeter)
+* [Editor API](Editor/HumanoidHandRetargeter/HandRetargetApi.cs)
+* [Job API](Editor/HumanoidHandRetargeter/HandRetargetApi.Jobs.cs)
+* [Editor pipeline](Editor/HumanoidHandRetargeter/HandEditorPipeline.cs)

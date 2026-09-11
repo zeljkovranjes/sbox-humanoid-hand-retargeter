@@ -36,7 +36,7 @@ internal static partial class HandDetectionProfiles
     internal static Hint?[] Resolve(Skel rig)
     {
         var proposals=new Dictionary<int,List<(int Score,Hint Hint)>>();
-        foreach(var profile in Catalog)
+        foreach(var profile in Catalog.Concat(new[]{CinemaHumanProfile}))
         {
             var matches=new Dictionary<int,string>();
             foreach(var bone in rig.Bones)
@@ -113,5 +113,21 @@ internal static partial class HandDetectionProfiles
         }
     }
     internal static bool IsDigit(string role)=>new[]{"Thumb","Index","Middle","Ring","Pinky"}.Any(role.StartsWith);
+    private static readonly Profile CinemaHumanProfile=CinemaBaseHuman();
+    private static Profile CinemaBaseHuman()
+    {
+        var aliases=new List<Alias>();
+        foreach(var side in new[]{"L","R"})
+        {
+            aliases.Add(new("UpperArm"+side,side+"Upperarm"));
+            aliases.Add(new("LowerArm"+side,side+"Forearm1"));
+            aliases.Add(new("Hand"+side,side+"Palm"));
+            var digits=new[]{"Thumb","Index","Middle","Ring","Pinky"};
+            var joints=new[]{"Prox","Mid","Dist"};
+            for(var d=0;d<5;d++)for(var j=0;j<3;j++)
+                aliases.Add(new(digits[d]+joints[j]+side,side+"Digit"+(d+1)+(j+1)));
+        }
+        return new("cinema4d_base_human",new[]{"^Base[-_]Human"},aliases.ToArray());
+    }
     private static bool IsArm(string role)=>role.StartsWith("Clavicle")||role.StartsWith("UpperArm")||role.StartsWith("LowerArm");
 }
