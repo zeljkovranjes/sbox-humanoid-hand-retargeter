@@ -21,6 +21,8 @@ public static class HandRigDetector
         var candidates = new List<HandMappingCandidate>();
         var issues = new List<RigIssue>();
         var review = false;
+        var deformBelow = new bool?[skeleton.Count];
+        int? digitWrist = null;
         var overrides = (manualOverrides ?? Array.Empty<HandRigDefinition>()).ToArray();
         if (overrides.Any(h => h is null))
             throw new ArgumentException("Manual overrides cannot contain a null hand.", nameof(manualOverrides));
@@ -57,6 +59,7 @@ public static class HandRigDetector
                 continue;
             }
             var selected = wrists[0];
+            digitWrist = selected;
             Add(side, "Wrist", new[] { selected }, .95f, names[selected].Profile is {} wristProfile
                 ? $"{wristProfile} profile and wrist hierarchy agree" : "Wrist name and side agree", true);
             var digits = new List<DigitChain>();
@@ -198,11 +201,27 @@ public static class HandRigDetector
                 if (!names[child].IsTip) yield return child;
             }
         }
+        // Layered rigs (Rigify DEF/ORG/MCH, animator controls) can parent deform digits
+        // under a non-deform palm next to their control copies. Below a deform wrist,
+        // follow only the deform layer and the containers that lead to it.
+        bool LeadsToDeform(int bone)
+        {
+            if (deformBelow[bone] is bool known) return known;
+            var result = names[bone].IsDeform || skeleton.ChildrenOf(bone).Any(LeadsToDeform);
+            deformBelow[bone] = result;
+            return result;
+        }
         IEnumerable<int> JointChildren(int parent)
         {
+            var layered = digitWrist is int wrist && names[wrist].IsDeform
+                && (parent == wrist || skeleton.DescendsFrom(parent, wrist))
+                && skeleton.ChildrenOf(parent).Any(c => !Blocked(c) && LeadsToDeform(c));
             foreach (var child in skeleton.ChildrenOf(parent))
             {
                 if (Blocked(child)) continue;
+                // The parent's own deform copy is a skinned twin, not a digit.
+                if (layered && (!LeadsToDeform(child)
+                    || names[child].IsDeform && !names[child].IsTip && names[child].FamilyKey == names[parent].FamilyKey)) continue;
                 if (names[child].IsHelper)
                 {
                     foreach (var nested in JointChildren(child)) yield return nested;

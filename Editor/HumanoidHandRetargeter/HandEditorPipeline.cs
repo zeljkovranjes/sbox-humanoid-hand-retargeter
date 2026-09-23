@@ -91,9 +91,17 @@ public static class HandEditorPipeline
     {
         if (path.EndsWith(".fbx",StringComparison.OrdinalIgnoreCase))
         {
-            var scene = await Task.Run(()=>FbxImporter.Import(File.ReadAllBytes(path),new FbxImportOptions {SampleFps=fps}),cancel);
+            var native = await Task.Run(()=>FbxImporter.Import(File.ReadAllBytes(path),new FbxImportOptions {SampleFps=fps}),cancel);
             await MainThread();
-            return new() { Path=path, Scene=scene, PalmFrames=HandPresetStore.LoadPalms(scene.Skeleton), Mapping=HandPresetStore.Load(scene.Skeleton) ?? HandRigDetector.Detect(scene.Skeleton) };
+            // Share the target's X-forward/Z-up view space so the source grip, eye and weapon
+            // motion transfer directly, whatever axes or facing the file was authored in.
+            var nativeMapping=HandPresetStore.Load(native.Skeleton);
+            var axesMapping=nativeMapping ?? HandRigDetector.Detect(native.Skeleton);
+            var turn=HandViewSpace.ViewRotation(native,axesMapping);
+            var scene=HandViewSpace.ToViewAxes(native,axesMapping);
+            // Mappings are index based; palm frames saved against the native axes turn with the rig.
+            var palms=HandPresetStore.LoadPalms(scene.Skeleton) ?? HandPresetStore.LoadPalms(native.Skeleton)?.ToDictionary(p=>p.Key,p=>Quat.Normalize(turn*p.Value));
+            return new() { Path=path, Scene=scene, PalmFrames=palms, Mapping=HandPresetStore.Load(scene.Skeleton) ?? nativeMapping ?? HandRigDetector.Detect(scene.Skeleton) };
         }
         await MainThread();
         path = ModelPath(path);
@@ -130,12 +138,15 @@ public static class HandEditorPipeline
         // Compiled s&box models already share X-forward/Z-up coordinates. A wrist's
         // bind rotation must not turn vertical reload travel into sideways/downward motion.
         var weaponOffset=options.WeaponSpaceOffset;
-        if(source.ModelPath is not null&&options.PreserveWeaponGrip&&options.TransferWristPosition
-            &&source.Scene.Skeleton.Bones.Any(b=>b.Name.Equals("weapon_root",StringComparison.OrdinalIgnoreCase)))
+        // FBX sources are loaded in view space, so every weapon file (named weapon bones or not)
+        // keeps both palms locked to the source grip relative to the eye.
+        var viewSpace=source.ModelPath is not null||source.Scene.UpAxis==2&&source.Scene.FrontAxis==0;
+        if(options.PreserveWeaponGrip&&options.TransferWristPosition&&(source.ModelPath is null&&viewSpace
+            ||source.Scene.Skeleton.Bones.Any(b=>b.Name.Equals("weapon_root",StringComparison.OrdinalIgnoreCase))))
             weaponOffset ??= HandViewSpace.EyePosition(target.Skeleton,target.Mapping)-HandViewSpace.EyePosition(source.Scene.Skeleton,source.Mapping);
         options=new HandMotionOptions{TransferWristPosition=options.TransferWristPosition,ScaleWristTravel=options.ScaleWristTravel,
             SolveArmIk=options.SolveArmIk,PreserveWeaponGrip=options.PreserveWeaponGrip,WeaponSpaceOffset=weaponOffset,
-            WristTravelBasis=options.WristTravelBasis??(source.ModelPath is not null?Quat.Identity:null)};
+            WristTravelBasis=options.WristTravelBasis??(viewSpace?Quat.Identity:null)};
         var notes=weaponOffset.HasValue?profile.Notes.Concat(new[]{"Preserved both palm grip anchors in one fixed weapon space; weapon motion is not scaled per arm."}).ToArray():profile.Notes;
         return new(source,clip,HandRetargeter.Bake(profile,clip,options,cancel),notes,weaponOffset,options);
     }
@@ -197,7 +208,7 @@ public static class HandEditorPipeline
             {
                 // Full source companion intentionally retains every authored camera,
                 // weapon and IK track with its original hierarchy, units and timing.
-                var tracks=DmxWriter.Write(clip.Source.Scene.Skeleton,clip.Original,new() {Name=name+"_source_tracks",UpAxisY=clip.Source.Scene.UpAxis==1,ForwardParity=clip.Source.ModelPath is null?2:1});
+                var tracks=DmxWriter.Write(clip.Source.Scene.Skeleton,clip.Original,new() {Name=name+"_source_tracks",UpAxisY=clip.Source.Scene.UpAxis==1,ForwardParity=clip.Source.ModelPath is null&&clip.Source.Scene.FrontAxis!=0?2:1});
                 files[folder+"/source_tracks/"+name+"_"+ContentKey(tracks)+".dmx"]=tracks;
             }
         }
