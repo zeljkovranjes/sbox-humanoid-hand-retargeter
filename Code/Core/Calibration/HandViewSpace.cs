@@ -73,7 +73,7 @@ public static class HandViewSpace
         var roots=scene.Skeleton.Bones.Where(b=>b.ParentIndex<0).Select(b=>b.Index).ToArray();
         var clips=scene.Clips.Select(c=>new Clip(c.Name,c.Fps,c.Looping,c.Frames.Select(f=>
         {
-            var frame=(XForm[])f.Clone();foreach(var root in roots)frame[root]=Turn(frame[root]);return frame;
+            var frame=f.ToArray();foreach(var root in roots)frame[root]=Turn(frame[root]);return frame;
         }).ToList(),c.NativeFps)).ToArray();
         return new SourceScene(Rotate(scene.Skeleton),clips,scene.UnitScaleCm,upAxis:2,frontAxis:0,coordAxis:1,
             originalUpAxis:scene.OriginalUpAxis,notes:scene.Notes)
