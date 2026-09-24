@@ -12,6 +12,9 @@ using SkeletonModel = HumanoidHandRetargeter.Skeleton.Skeleton;
 
 namespace HumanoidHandRetargeter.Sources;
 
+using Vector3 = System.Numerics.Vector3; // s&box compat: shadow the engine's global-namespace Vector3
+using Quaternion = System.Numerics.Quaternion;
+
 /// <summary>
 /// MANO hands (the parametric hand model of Romero et al., used by grasp generators such as
 /// GrabNet) as a retargeting source. A MANO hand has 16 joints - the wrist, then index, middle,
