@@ -17,3 +17,5 @@ Editor/*.csproj
 Code/Properties/
 Editor/Properties/
 *.user
+CLAUDE.md
+DEVLOG.md
