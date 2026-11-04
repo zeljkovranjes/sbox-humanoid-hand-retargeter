@@ -18,7 +18,7 @@ public sealed class HandRetargetWindow : Widget
 {
     public const string DockTitle="Humanoid Hand Retargeter";
     static HandRetargetWindow? instance;
-    readonly List<Row> rows=new();readonly Layout list;readonly Label status;readonly Label report;
+    readonly List<Row> rows=new();readonly Layout list;readonly Label status;readonly Label report;readonly Label targetGraph;
     readonly Button convert,add,details;readonly ComboBox targets;readonly Widget options;
     readonly Checkbox graph,backup,ik,travel,scale,companion,weapon,grip;
     readonly LineEdit output,fps;bool busy;CancellationTokenSource? cancellation;
@@ -37,6 +37,7 @@ public sealed class HandRetargetWindow : Widget
         targets.AddItem("Citizen FPS arms","person_outline",()=>_=SelectTargetAsync(HandEditorPipeline.CitizenArms));
         targets.AddItem("Custom model (.vmdl)…","view_in_ar",PickTargetModel);
         targets.AddItem("Custom hands (.fbx)…","category",PickTargetFbx);
+        targetGraph=top.Add(new Label(this){ToolTip="Animation graph system of the target model. Generated graphs follow a source weapon's own graph, else this."});
         top.AddSpacingCell(8);top.Add(new Label(this){Text="Output:"});var outputMode=top.Add(new ComboBox(this){MinimumWidth=200});
         outputMode.AddItem("New animation vmdl","note_add",()=>{if(output is not null)output.Text="models/hand_retargeter/retargeted_hands.vmdl";},selected:true);
         outputMode.AddItem("Add to existing vmdl…","library_add",()=>{
@@ -46,7 +47,7 @@ public sealed class HandRetargetWindow : Widget
         var scroll=Layout.Add(new ScrollArea(this),1);scroll.Canvas=new Widget(scroll);scroll.Canvas.Layout=Layout.Column();scroll.Canvas.Layout.Margin=new Sandbox.UI.Margin(8,4,16,4);scroll.Canvas.Layout.Spacing=2;list=scroll.Canvas.Layout;
         options=Layout.Add(new Group(this){Title="Options",Icon="tune"});options.Layout=Layout.Row();options.Layout.Margin=new Sandbox.UI.Margin(14,30,14,12);options.Layout.Spacing=24;
         var a=options.Layout.AddColumn();a.Spacing=6;
-        graph=a.Add(new Checkbox("Auto Configure AnimGraph"){Value=true});graph.ToolTip="Preserve the complete source weapon graph with live custom-hand retargeting. Sources without a graph get a generated action graph. Creates a synchronized weapon prefab; existing assets are preserved.";
+        graph=a.Add(new Checkbox("Auto Configure AnimGraph"){Value=true});graph.ToolTip="Preserve the complete source weapon graph with live custom-hand retargeting. Sources without a graph get a generated action graph. Creates a synchronized weapon prefab; existing assets are preserved. Graphs are AnimGraph2 (.ag) when a source weapon or the target uses AnimGraph2.";
         backup=a.Add(new Checkbox("Back up target VMDL"){Value=true});
         weapon=a.Add(new Checkbox("Weapon-compatible arms"){Value=false});weapon.ToolTip="Keep animation graph ownership on the weapon. Arms are bonemerged onto it.";
         companion=a.Add(new Checkbox("Preserve source tracks"){Value=true});companion.ToolTip="Also export the original hierarchy and animation as a companion DMX, preserving weapon, camera and IK tracks.";
@@ -81,6 +82,7 @@ public sealed class HandRetargetWindow : Widget
             :path.Equals(HandEditorPipeline.CitizenArms,StringComparison.OrdinalIgnoreCase)?1
             :path.EndsWith(".fbx",StringComparison.OrdinalIgnoreCase)?3:2;
         LastBake=Array.Empty<HandBakedClip>();
+        targetGraph.Text=AnimGraphVersions.Describe(HandEditorPipeline.AnimGraphOf(Target.ModelPath));
         report.Text=string.Join("\n",Target.ImportNotes);
         status.Text="Target: "+System.IO.Path.GetFileName(path)+(Target.Mapping.NeedsReview?" — confirm Target Mapping":"");
     });
@@ -147,6 +149,7 @@ public sealed class HandRetargetWindow : Widget
             var widget=new Widget(this);widget.Layout=Layout.Row();widget.Layout.Margin=new Sandbox.UI.Margin(32,4,8,4);widget.Layout.Spacing=8;
             var selection=widget.Layout.Add(new Checkbox(""){Value=row.Selected,Enabled=!busy});selection.Clicked=()=>{row.Selected=selection.Value;convert.Enabled=!busy&&Target is not null&&rows.Any(r=>r.Selected);};
             widget.Layout.Add(new Label(this){Text=System.IO.Path.GetFileName(row.Source.Path)+" · "+row.Animation.Name},1).SetStyles("font-weight:600;");
+            if(row.Source.ModelPath is {} weaponPath)widget.Layout.Add(new Label(this){Text=AnimGraphVersions.Describe(HandEditorPipeline.AnimGraphOf(weaponPath)),ToolTip="Animation graph system of this source weapon"});
             var chip=widget.Layout.Add(new Label(this){Text=row.Source.Mapping.NeedsReview?"Needs review":"Mapped",FixedHeight=20});
             chip.SetStyles($"background-color:{(row.Source.Mapping.NeedsReview?Theme.Yellow:Theme.Green).WithAlpha(.18f).Hex};border-radius:10px;padding:2px 8px;");
             widget.Layout.Add(new Button("Mapping…","device_hub"){Enabled=!busy,Clicked=()=>MapSource(row.Source)});

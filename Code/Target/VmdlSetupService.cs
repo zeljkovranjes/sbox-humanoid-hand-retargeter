@@ -12,17 +12,25 @@ public sealed class VmdlSetupOptions
     public bool AutoConfigureAnimGraph { get; init; } = true;
     /// <summary>Arms bonemerge onto a weapon; this service must not assign a weapon graph to arms.</summary>
     public bool WeaponCompatibleArms { get; init; }
+    /// <summary>Configure AnimGraph2 instead, on the skeleton in this DMX (one holding a model, not a clip): a
+    /// <c>.skel</c> and an <c>.anim</c> per animation beside it, and an <c>.ag</c> hand graph assigned with
+    /// <c>animation_graph_name</c> when the model has no graph. Null configures AnimGraph1.</summary>
+    public string? AnimGraph2Skeleton { get; init; }
 }
 
 /// <summary>Reviewable, pure setup output. File persistence and asset compilation belong to the editor.</summary>
 public sealed record VmdlSetupResult(string VmdlText, bool Changed, bool BindPoseAdded,
     string? GeneratedGraphPath, string? GeneratedGraphText,
-    IReadOnlyList<ConfiguredAnimation> Animations, IReadOnlyList<string> Changes);
+    IReadOnlyList<ConfiguredAnimation> Animations, IReadOnlyList<string> Changes,
+    IReadOnlyDictionary<string, string>? GeneratedSources = null);
 
 /// <summary>Hand-specific specialization of the audited VmdlAugmenter. Uses its KV3 tree
 /// representation to preserve unknown settings and avoid editing ModelDoc text in UI code.</summary>
 public static class VmdlSetupService
 {
+    /// <summary>The RootNode key assigning an AnimGraph2 graph; AnimGraph1's <c>anim_graph_name</c> sits beside it.</summary>
+    public const string AnimGraph2Key = "animation_graph_name";
+
     public static VmdlSetupResult Prepare(string existingVmdl, IEnumerable<HandAnimationEntry> animations,
         VmdlSetupOptions options)
     {
@@ -87,20 +95,54 @@ public static class VmdlSetupService
         var existingGraph = root.GetOrNull("anim_graph_name");
         if (existingGraph is not null && existingGraph is not KvString)
             throw new FormatException("VMDL anim_graph_name must be a string.");
-        if (options.AutoConfigureAnimGraph && !options.WeaponCompatibleArms
+        Dictionary<string, string>? sources = null;
+        if (options.AnimGraph2Skeleton is not null && options.AutoConfigureAnimGraph && !options.WeaponCompatibleArms)
+        {
+            if (root.GetOrNull(AnimGraph2Key) is { } assigned && assigned is not KvString)
+                throw new FormatException($"VMDL {AnimGraph2Key} must be a string.");
+            // A clip plays only on the skeleton it was compiled against, so every clip shares this one and sits beside it:
+            // an existing bind pose from elsewhere may already have an .anim beside it, compiled against another skeleton.
+            var skeletonSource = NormalizeAssetPath(options.AnimGraph2Skeleton, ".dmx");
+            var skeleton = AnimGraph2Sources.Beside(skeletonSource, ".skel");
+            var folder = skeleton[..(skeleton.LastIndexOf('/') + 1)];
+            sources = new(StringComparer.OrdinalIgnoreCase) { [skeleton] = AnimGraph2Sources.Skeleton(skeletonSource, AnimGraph2Sources.ModelScale(root)) };
+            var clips = new Dictionary<string, string>(StringComparer.Ordinal);
+            void AddClip(string sequence, string file)
+            {
+                var anim = folder + AnimGraph2Sources.Beside(file[(file.LastIndexOf('/') + 1)..], ".anim");
+                sources[anim] = AnimGraph2Sources.Clip(file, skeleton);
+                clips[sequence] = anim;
+            }
+            foreach (var animation in configured) AddClip(animation.SequenceName, animation.SourceFilename);
+            if (string.IsNullOrWhiteSpace(root.GetString("anim_graph_name")) && string.IsNullOrWhiteSpace(root.GetString(AnimGraph2Key)))
+            {
+                graphPath = modelPath[..^5] + "_hands.ag";
+                var initialSequence = InitialSequence();
+                if (initialSequence == bindName) AddClip(bindName, names[bindName].GetString("source_filename")!.Replace('\\', '/'));
+                graphText = AnimGraph2Writer.Write(HandAnimGraph.Create(initialSequence, modelPath), modelPath, skeleton, clips);
+                root[AnimGraph2Key] = new KvString(graphPath);
+                changes.Add($"Assigned standalone AnimGraph2 hand graph '{graphPath}' using '{initialSequence}'.");
+            }
+        }
+        else if (options.AutoConfigureAnimGraph && !options.WeaponCompatibleArms
             && string.IsNullOrWhiteSpace(root.GetString("anim_graph_name")))
         {
             graphPath = modelPath[..^5] + "_hands.vanmgrph";
-            var idle = entries.FirstOrDefault(e => e.Looping && e.Name.Contains("idle", StringComparison.OrdinalIgnoreCase)
-                && !e.Name.EndsWith("_delta", StringComparison.OrdinalIgnoreCase));
-            var initialSequence = idle is null ? bindName : configured.Single(c => c.RequestedName == idle.Name).SequenceName;
+            var initialSequence = InitialSequence();
             graphText = HandAnimGraph.Create(initialSequence, modelPath);
             root["anim_graph_name"] = new KvString(graphPath);
             changes.Add($"Assigned standalone hand graph '{graphPath}' using '{initialSequence}'.");
         }
         var changed = changes.Count > 0;
         return new(changed ? Kv3.Serialize(doc) : existingVmdl, changed, bindAdded,
-            graphPath, graphText, configured.AsReadOnly(), changes.AsReadOnly());
+            graphPath, graphText, configured.AsReadOnly(), changes.AsReadOnly(), sources);
+
+        string InitialSequence()
+        {
+            var idle = entries.FirstOrDefault(e => e.Looping && e.Name.Contains("idle", StringComparison.OrdinalIgnoreCase)
+                && !e.Name.EndsWith("_delta", StringComparison.OrdinalIgnoreCase));
+            return idle is null ? bindName : configured.Single(c => c.RequestedName == idle.Name).SequenceName;
+        }
 
         string Upsert(HandAnimationEntry entry)
         {

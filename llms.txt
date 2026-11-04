@@ -130,7 +130,7 @@ Jobs execute serially to avoid competing editor asset writes. Up to eight pendin
 
 Existing VMDL sequences and authored settings are preserved. A changed clip can receive a suffixed sequence name rather than replace existing animation. Export reports include the actual changes and any backup. Export validation failures roll back the transaction; imported target copies may remain.
 
-Automatic AnimGraph setup uses the original weapon graph through a generated live-retargeting weapon prefab when available. It does not transplant a weapon's entire graph onto a differently named hand skeleton. Keep original weapon dependencies installed. FBX sources without weapon graphs cannot supply gameplay logic or weapon assets that were never in the file.
+Automatic AnimGraph setup uses the original weapon graph through a generated live-retargeting weapon prefab when available. It does not transplant a weapon's entire graph onto a differently named hand skeleton. Keep original weapon dependencies installed. Source weapons with an AnimGraph2 graph keep it the same way. Generated graphs are AnimGraph2 (.ag assigned by animation_graph_name, with .skel and .anim sources) when a source weapon or the target uses AnimGraph2, else AnimGraph1 (.vanmgrph); inspectSource and inspectTarget report animGraph. FBX sources without weapon graphs cannot supply gameplay logic or weapon assets that were never in the file.
 
 Missing materials and textures do not block skeletal conversion. The UI preview can use a neutral material; exported assets still need their visual dependencies for the intended appearance. Some rigs require mapping or skin-weight adjustments; collision-free deformation for arbitrary meshes is not guaranteed.
 

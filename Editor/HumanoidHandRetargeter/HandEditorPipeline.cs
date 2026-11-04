@@ -212,12 +212,28 @@ public static class HandEditorPipeline
                 files[folder+"/source_tracks/"+name+"_"+ContentKey(tracks)+".dmx"]=tracks;
             }
         }
-        var prepared=VmdlSetupService.Prepare(original,entries,new() {ModelPath=outputModel,BindPoseSource=folder+"/bind.dmx",AutoConfigureAnimGraph=autoGraph,WeaponCompatibleArms=weaponCompatible});
+        // The graph the output must work with decides the system: a source weapon's own, else the target's.
+        var targetAnimGraph2=AnimGraphOf(target.ModelPath)==AnimGraphVersion.AnimGraph2;
+        var animGraph2=targetAnimGraph2||clips.Any(c=>c.Source.ModelPath is {} weapon&&AnimGraphOf(weapon)==AnimGraphVersion.AnimGraph2);
+        string? skeletonSource=null;
+        if(animGraph2&&autoGraph)
+        {
+            // AnimGraph2 reads bones from a DMX model, not from a clip like bind.dmx.
+            skeletonSource=folder+"/skeleton.dmx";
+            files[skeletonSource]=DmxWriter.Write(exportSkeleton,bind,new() {Name="bindPose",UpAxisY=false,ForwardParity=1,SkeletonModel=true});
+        }
+        var prepared=VmdlSetupService.Prepare(original,entries,new() {ModelPath=outputModel,BindPoseSource=folder+"/bind.dmx",AutoConfigureAnimGraph=autoGraph,WeaponCompatibleArms=weaponCompatible,AnimGraph2Skeleton=skeletonSource});
         var generatedAssets=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
-        var bundles=autoGraph?HandWeaponExport.Prepare(target,clips,outputModel,files,generatedAssets,cancel):Array.Empty<HandWeaponExport.Bundle>();
+        if(prepared.GeneratedSources is not null)foreach(var (path,text) in prepared.GeneratedSources)generatedAssets[path]=text;
+        var bundles=autoGraph?HandWeaponExport.Prepare(target,clips,outputModel,files,generatedAssets,cancel,targetAnimGraph2):Array.Empty<HandWeaponExport.Bundle>();
         foreach(var bundle in bundles)generatedAssets[bundle.PrefabPath]=HandWeaponExport.Prefab(bundle);
         var committed=await VmdlSetupTransaction.CommitAsync(Assets,outputModel,existing,prepared,files,async(paths,token)=>{
             await MainThread(); foreach(var path in paths) AssetSystem.RegisterFile(path);
+            // Compiling a model doesn't compile the graph it names, so every generated graph compiles first. AnimGraph2
+            // graphs play compiled clips, which need their skeleton: compile in that order.
+            foreach(var extension in new[]{".skel",".anim",".ag",".vanmgrph"})
+                foreach(var path in paths.Where(p=>p.EndsWith(extension,StringComparison.OrdinalIgnoreCase)))
+                    if(!await CompileGraphSourceAsync(path,token))throw new InvalidOperationException("Animation graph source did not compile: "+path);
             foreach(var bundle in bundles)
             {
                 if(bundle.LiveCalibration is null)
@@ -225,9 +241,9 @@ public static class HandEditorPipeline
                     if(!await CompileAsync(System.IO.Path.Combine(Assets,bundle.ModelPath),token))throw new InvalidOperationException("Weapon animation model did not compile: "+bundle.ModelPath);
                     await MainThread();
                     await Task.Delay(100,token);await MainThread();
-                    var owner=Model.Load(bundle.ModelPath);var graph=AnimationGraph.Load(bundle.GraphPath);
-                    if(owner is null||owner.IsError||!owner.HasRenderMeshes()||owner.BoneCount<bundle.BoneCount||graph is null||graph.IsError
-                        ||!bundle.Actions.All(a=>owner.AnimationNames.Contains(a.Sequence)))throw new InvalidOperationException($"Weapon animation owner validation failed: bones {owner?.BoneCount}/{bundle.BoneCount}, meshes {owner?.MeshCount}, vertices {owner?.MeshInfo.TotalVertices}, triangles {owner?.MeshInfo.TotalTriangles}, graph error {graph?.IsError}, sequences {string.Join(",",owner?.AnimationNames??Array.Empty<string>())}.");
+                    var owner=Model.Load(bundle.ModelPath);var graphError=GraphError(bundle.GraphPath);
+                    if(owner is null||owner.IsError||!owner.HasRenderMeshes()||owner.BoneCount<bundle.BoneCount||graphError is not false
+                        ||!bundle.Actions.All(a=>owner.AnimationNames.Contains(a.Sequence)))throw new InvalidOperationException($"Weapon animation owner validation failed: bones {owner?.BoneCount}/{bundle.BoneCount}, meshes {owner?.MeshCount}, vertices {owner?.MeshInfo.TotalVertices}, triangles {owner?.MeshInfo.TotalTriangles}, graph error {graphError}, sequences {string.Join(",",owner?.AnimationNames??Array.Empty<string>())}.");
                     if(target.Skeleton.Bones.Any(b=>owner.Bones.GetBone(WeaponClipBuilder.HandPrefix+b.Name) is null))return false;
                 }
 
@@ -253,7 +269,7 @@ public static class HandEditorPipeline
                 await Task.Delay(50,token);await MainThread();model=Model.Load(outputModel);
             }
             if(model is null || model.IsError || !prepared.Animations.All(a=>model.AnimationNames.Contains(a.SequenceName)))return false;
-            if(prepared.GeneratedGraphPath is { } graphPath){var graph=AnimationGraph.Load(graphPath);if(graph is null||graph.IsError)return false;}
+            if(prepared.GeneratedGraphPath is { } graphPath&&GraphError(graphPath) is not false)return false;
 
             var compiledRig=ReadSkeleton(model);
             using var sampler=new ModelSampler(model,compiledRig);
@@ -280,6 +296,13 @@ public static class HandEditorPipeline
         return new(outputModel,prepared.Changes.Concat(bundles.Select(b=>b.LiveCalibration is not null
             ? $"Preserved complete source graph {b.GraphPath} with live custom-hand retargeting: {b.PrefabPath}"
             : $"Created weapon graph ({string.Join(", ",b.Actions.Select(a=>a.Action))}) and synchronized hands/weapon prefab: {b.PrefabPath}")).ToArray(),committed.BackupPath,bundles.Select(b=>b.PrefabPath).ToArray());
+    }
+
+    // Whether the graph at path failed to load (null when it didn't load at all), for AnimGraph1 and AnimGraph2 alike.
+    private static bool? GraphError(string path)
+    {
+        if(path.EndsWith(".ag",StringComparison.OrdinalIgnoreCase))return !AnimGraphVersions.CanLoadAnimGraph2(path);
+        return AnimationGraph.Load(path)?.IsError;
     }
 
     private static float ExportPositionFactor(string text)
@@ -419,6 +442,20 @@ public static class HandEditorPipeline
         return false;
     }
 
+    const int ContentBuildRetries=5;
+    const int ContentBuildRetryDelayMs=2000;
+
+    // Registering the new files starts a content build, which refuses other compiles until it ends: try again.
+    static async Task<bool> CompileGraphSourceAsync(string absolute,CancellationToken cancel)
+    {
+        for(var attempt=1;;attempt++)
+        {
+            if(await CompileAsync(absolute,cancel))return true;
+            if(attempt==ContentBuildRetries)return false;
+            await Task.Delay(ContentBuildRetryDelayMs,cancel);
+        }
+    }
+
     public static bool HasMissingMaterials(Model model)
     {
         var materials=model.Materials.Concat(Enumerable.Range(0,model.MaterialGroupCount).SelectMany(group=>model.GetMaterials(group))).Distinct();
@@ -438,6 +475,8 @@ public static class HandEditorPipeline
         // Override this preview instance only; authored assets remain editable.
         if(HasMissingMaterials(model.Model))model.SetMaterialOverride(Material.Load("materials/dev/reflectivity_50.vmat"));
     }
+    /// <summary>The graph system driving the model at <paramref name="modelPath"/>; AnimGraph1 when it doesn't load.</summary>
+    public static AnimGraphVersion AnimGraphOf(string modelPath)=>AnimGraphVersions.Of(Model.Load(modelPath));
     public static string ModelPath(string path)
     {
         if(path.EndsWith(".vmdl_c",StringComparison.OrdinalIgnoreCase))path=path[..^2];
@@ -474,6 +513,7 @@ public static class HandEditorPipeline
         }
         public Clip? SampleFire(float duration,float fps,CancellationToken cancel)
         {
+            if(AnimGraphVersions.Of(asset)==AnimGraphVersion.AnimGraph2)return SampleFireAnimGraph2(duration,fps,cancel);
             var model=new SceneModel(world,asset,Transform.Zero){UseAnimGraph=true};
             try
             {
@@ -491,6 +531,35 @@ public static class HandEditorPipeline
                 return new Clip("Fire",fps,false,frames);
             }
             finally{model.Delete();}
+        }
+        // SceneModel has no AnimGraph2: the same firing sequence drives a renderer through the parameter bridge,
+        // stepping its editor scene, where the bridge writes before each animation update.
+        Clip? SampleFireAnimGraph2(float duration,float fps,CancellationToken cancel)
+        {
+            GameObject owner;SkinnedModelRenderer renderer;
+            using(metadataScene.Push())
+            {
+                owner=new GameObject(true,"fire sampler");renderer=owner.GetOrAddComponent<SkinnedModelRenderer>();
+                renderer.Model=asset;renderer.UseAnimGraph=true;renderer.PlayAnimationsInEditorScene=true;
+            }
+            try
+            {
+                if(AnimGraphVersions.Of(renderer)!=AnimGraphVersion.AnimGraph2)return null;
+                var time=0f;
+                void Step(float delta){time+=delta;metadataScene.EditorTick(time,delta);}
+                AnimGraphParameters.Set(renderer,"skeleton",0);AnimGraphParameters.Set(renderer,"b_deploy_skip",true);
+                for(var i=0;i<120;i++){cancel.ThrowIfCancellationRequested();Step(1f/60);}
+                AnimGraphParameters.Set(renderer,"b_deploy_skip",false);
+                var frames=new List<XForm[]>();
+                for(var f=0;f<=Math.Max(1,(int)MathF.Ceiling(duration*fps));f++)
+                {
+                    cancel.ThrowIfCancellationRequested();AnimGraphParameters.Set(renderer,"b_attack",f==0);Step(f==0?0:1f/fps);
+                    var worlds=bones.Select(b=>FromEngine(renderer.SceneModel.GetBoneWorldTransform(b))).ToArray();
+                    frames.Add(skeleton.Bones.Select(b=>b.ParentIndex<0?worlds[b.Index]:XForm.ToLocal(worlds[b.ParentIndex],worlds[b.Index])).ToArray());
+                }
+                return new Clip("Fire",fps,false,frames);
+            }
+            finally{owner.Destroy();}
         }
         public void Dispose() {world.Delete();metadataScene.Destroy();}
     }

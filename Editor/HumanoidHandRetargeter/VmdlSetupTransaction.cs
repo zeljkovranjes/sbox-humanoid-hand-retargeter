@@ -45,7 +45,7 @@ public static class VmdlSetupTransaction
             if(generatedAssets is not null)foreach(var (path,content) in generatedAssets)
             {
                 var extension=Path.GetExtension(path).ToLowerInvariant();
-                if(extension is not (".vmdl" or ".vanmgrph" or ".prefab" or ".fbx"))throw new ArgumentException("Unsupported generated weapon asset.");
+                if(extension is not (".vmdl" or ".vanmgrph" or ".prefab" or ".fbx" or ".ag" or ".skel" or ".anim"))throw new ArgumentException("Unsupported generated weapon asset.");
                 var resolved=Resolve(path,extension);var bytes=Encoding.UTF8.GetBytes(content);
                 if(File.Exists(resolved)&&!File.ReadAllBytes(resolved).SequenceEqual(bytes))
                     throw new IOException($"Generated asset '{path}' has been edited. Choose a new output path to preserve it.");
@@ -59,7 +59,7 @@ public static class VmdlSetupTransaction
             }
             if (prepared.GeneratedGraphPath is not null)
             {
-                var graph = Resolve(prepared.GeneratedGraphPath, ".vanmgrph");
+                var graph = Resolve(prepared.GeneratedGraphPath, GraphExtension(prepared.GeneratedGraphPath));
                 var bytes = Encoding.UTF8.GetBytes(prepared.GeneratedGraphText
                     ?? throw new ArgumentException("Generated graph content is missing."));
                 if (File.Exists(graph) && !File.ReadAllBytes(graph).SequenceEqual(bytes))
@@ -75,7 +75,7 @@ public static class VmdlSetupTransaction
                 if(previous[path] is {} bytes&&!bytes.SequenceEqual(writes[path]))throw new IOException("A generated asset changed while preparing the save.");
             if (prepared.GeneratedGraphPath is { } generatedPath)
             {
-                var graph = Resolve(generatedPath, ".vanmgrph");
+                var graph = Resolve(generatedPath, GraphExtension(generatedPath));
                 if (previous[graph] is { } existing && !existing.SequenceEqual(writes[graph]))
                     throw new IOException("The generated graph path was changed while preparing the save.");
             }
@@ -144,6 +144,10 @@ public static class VmdlSetupTransaction
         }
         finally { Gate.Release(); }
     }
+
+    // AnimGraph1 (.vanmgrph) or AnimGraph2 (.ag); anything else is refused by Resolve.
+    private static string GraphExtension(string path)
+        => path.EndsWith(".ag", StringComparison.OrdinalIgnoreCase) ? ".ag" : ".vanmgrph";
 
     private static bool Equal(byte[]? a, byte[]? b)
         => a is null ? b is null : b is not null && a.SequenceEqual(b);

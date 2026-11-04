@@ -55,6 +55,8 @@ public sealed class RetargetedWeapon : Component
         return transform;
     }
     private SceneModel? driver, weapon, hands;
+    // Plays an AnimGraph2 owner graph, which SceneModel can't: driver is then this renderer's scene model.
+    private SkinnedModelRenderer? graphDriver;
     private (int From,int To)[] weaponBones=Array.Empty<(int,int)>(), handBones=Array.Empty<(int,int)>();
     private Model? loadedAnimation,loadedWeapon,loadedHands;
     private bool attack,reload,deploy,holstered,empty,skipDeploy,dry;
@@ -89,10 +91,24 @@ public sealed class RetargetedWeapon : Component
                 ?? throw new InvalidOperationException("Target model changed; re-export calibration for " + b.Name))).ToArray() : Map(HandsModel,WeaponClipBuilder.HandPrefix);
             loadedAnimation=AnimationModel;loadedWeapon=WeaponModel;loadedHands=HandsModel;
             loadedCalibration=LiveCalibration;
-            driver=new SceneModel(Scene.SceneWorld,owner,global::Transform.Zero){UseAnimGraph=true,RenderingEnabled=false};
-            driver.OnAnimTagEvent=tag=>AnimationTag?.Invoke(tag);
-            if (UsesOriginalGraph && (driver.AnimationGraph is null || driver.AnimationGraph.IsError))
-                throw new InvalidOperationException("Source weapon graph is unavailable. Restore its dependencies before using this prefab.");
+            if (AnimGraphVersions.Of(owner) == AnimGraphVersion.AnimGraph2)
+            {
+                var graphObject=Scene.CreateObject();graphObject.Name="Retargeted weapon graph";
+                graphObject.Flags=GameObjectFlags.Hidden|GameObjectFlags.NotSaved;
+                graphDriver=graphObject.AddComponent<SkinnedModelRenderer>();
+                graphDriver.Model=owner;graphDriver.UseAnimGraph=true;
+                graphDriver.OnAnimTagEvent=tag=>AnimationTag?.Invoke(tag);
+                driver=graphDriver.SceneModel;
+                if (AnimGraphVersions.Of(graphDriver) != AnimGraphVersion.AnimGraph2)
+                    throw new InvalidOperationException("Source weapon graph is unavailable. Restore its dependencies before using this prefab.");
+            }
+            else
+            {
+                driver=new SceneModel(Scene.SceneWorld,owner,global::Transform.Zero){UseAnimGraph=true,RenderingEnabled=false};
+                driver.OnAnimTagEvent=tag=>AnimationTag?.Invoke(tag);
+                if (UsesOriginalGraph && (driver.AnimationGraph is null || driver.AnimationGraph.IsError))
+                    throw new InvalidOperationException("Source weapon graph is unavailable. Restore its dependencies before using this prefab.");
+            }
             weapon=new SceneModel(Scene.SceneWorld,WeaponModel,WorldTransform){UseAnimGraph=false};
             hands=new SceneModel(Scene.SceneWorld,HandsModel,WorldTransform){UseAnimGraph=false};
             weapon.SetAnimGraph("");hands.SetAnimGraph("");
@@ -103,25 +119,35 @@ public sealed class RetargetedWeapon : Component
         // In third person the body supplies the arm shadow and the held gun casts its own.
         hands.Flags.CastShadows=false;
         weapon.Flags.CastShadows=ThirdPersonBody is not null;
-        driver.Transform=UsesOriginalGraph ? global::Transform.Zero : new global::Transform(-ViewOrigin);
-        driver.SetAnimParameter("b_attack",attack);driver.SetAnimParameter("b_reload",reload);
-        driver.SetAnimParameter("b_deploy",deploy);driver.SetAnimParameter("b_empty",empty);
-        driver.SetAnimParameter("b_holster",holstered);driver.SetAnimParameter("b_deploy_skip",skipDeploy);
-        if (UsesOriginalGraph)
+        if (graphDriver is not null)
         {
-            driver.SetAnimParameter("ironsights", Aiming ? 1 : 0);
-            driver.SetAnimParameter("skeleton", SourceSkeleton);
-            driver.SetAnimParameter("b_sprint", Sprinting);
-            driver.SetAnimParameter("move_bob", Movement);
-            driver.SetAnimParameter("b_attack_dry", dry);
+            // The scene animates this renderer before PreRender, so parameters set here reach its next update.
+            graphDriver.WorldTransform=UsesOriginalGraph ? global::Transform.Zero : new global::Transform(-ViewOrigin);
+            driver=graphDriver.SceneModel;driver.RenderingEnabled=false;
+            SetAnimGraph2Parameters(graphDriver);
         }
-        foreach(var p in boolParameters)driver.SetAnimParameter(p.Key,p.Value);
-        foreach(var p in intParameters)driver.SetAnimParameter(p.Key,p.Value);
-        foreach(var p in floatParameters)driver.SetAnimParameter(p.Key,p.Value);
-        foreach(var p in vectorParameters)driver.SetAnimParameter(p.Key,p.Value);
-        foreach(var p in stringParameters)driver.SetAnimParameter(p.Key,p.Value);
-        foreach(var p in rotationParameters)driver.SetAnimParameter(p.Key,p.Value);
-        driver.Update(deltaTime);
+        else
+        {
+            driver.Transform=UsesOriginalGraph ? global::Transform.Zero : new global::Transform(-ViewOrigin);
+            driver.SetAnimParameter("b_attack",attack);driver.SetAnimParameter("b_reload",reload);
+            driver.SetAnimParameter("b_deploy",deploy);driver.SetAnimParameter("b_empty",empty);
+            driver.SetAnimParameter("b_holster",holstered);driver.SetAnimParameter("b_deploy_skip",skipDeploy);
+            if (UsesOriginalGraph)
+            {
+                driver.SetAnimParameter("ironsights", Aiming ? 1 : 0);
+                driver.SetAnimParameter("skeleton", SourceSkeleton);
+                driver.SetAnimParameter("b_sprint", Sprinting);
+                driver.SetAnimParameter("move_bob", Movement);
+                driver.SetAnimParameter("b_attack_dry", dry);
+            }
+            foreach(var p in boolParameters)driver.SetAnimParameter(p.Key,p.Value);
+            foreach(var p in intParameters)driver.SetAnimParameter(p.Key,p.Value);
+            foreach(var p in floatParameters)driver.SetAnimParameter(p.Key,p.Value);
+            foreach(var p in vectorParameters)driver.SetAnimParameter(p.Key,p.Value);
+            foreach(var p in stringParameters)driver.SetAnimParameter(p.Key,p.Value);
+            foreach(var p in rotationParameters)driver.SetAnimParameter(p.Key,p.Value);
+            driver.Update(deltaTime);
+        }
         // Anchor after evaluating this frame's weapon pose. Using the previous frame's
         // source hand adds an unwanted second kick and lets the gun slip in the grip.
         if(ThirdPersonBody is {} body && body.TryGetBoneTransform(WorldGripBone,out var hand)
@@ -154,6 +180,26 @@ public sealed class RetargetedWeapon : Component
         }
         Apply(weapon,weaponBones);Apply(hands,handBones);
     }
+    // The same parameters as the AnimGraph1 driver, through the bridge. AnimGraph2 has no rotation parameters.
+    private void SetAnimGraph2Parameters(SkinnedModelRenderer renderer)
+    {
+        AnimGraphParameters.Set(renderer,"b_attack",attack);AnimGraphParameters.Set(renderer,"b_reload",reload);
+        AnimGraphParameters.Set(renderer,"b_deploy",deploy);AnimGraphParameters.Set(renderer,"b_empty",empty);
+        AnimGraphParameters.Set(renderer,"b_holster",holstered);AnimGraphParameters.Set(renderer,"b_deploy_skip",skipDeploy);
+        if (UsesOriginalGraph)
+        {
+            AnimGraphParameters.Set(renderer,"ironsights", Aiming ? 1 : 0);
+            AnimGraphParameters.Set(renderer,"skeleton", SourceSkeleton);
+            AnimGraphParameters.Set(renderer,"b_sprint", Sprinting);
+            AnimGraphParameters.Set(renderer,"move_bob", Movement);
+            AnimGraphParameters.Set(renderer,"b_attack_dry", dry);
+        }
+        foreach(var p in boolParameters)AnimGraphParameters.Set(renderer,p.Key,p.Value);
+        foreach(var p in intParameters)AnimGraphParameters.Set(renderer,p.Key,p.Value);
+        foreach(var p in floatParameters)AnimGraphParameters.Set(renderer,p.Key,p.Value);
+        foreach(var p in vectorParameters)AnimGraphParameters.Set(renderer,p.Key,p.Value);
+        foreach(var p in stringParameters)AnimGraphParameters.Set(renderer,p.Key,p.Value);
+    }
     static XForm FromEngine(global::Transform t) => new(new System.Numerics.Vector3(t.Position.x,t.Position.y,t.Position.z)*2.54f,
         new System.Numerics.Quaternion(t.Rotation.x,t.Rotation.y,t.Rotation.z,t.Rotation.w));
     static global::Transform ToEngine(XForm t) => new(new global::Vector3(t.Pos.X,t.Pos.Y,t.Pos.Z)/2.54f,
@@ -162,7 +208,9 @@ public sealed class RetargetedWeapon : Component
     protected override void OnDestroy()=>Release();
     private void Release()
     {
-        driver?.Delete();weapon?.Delete();hands?.Delete();driver=weapon=hands=null;
+        if(graphDriver is not null){if(graphDriver.IsValid())graphDriver.GameObject.Destroy();graphDriver=null;}
+        else driver?.Delete();
+        weapon?.Delete();hands?.Delete();driver=weapon=hands=null;
         loadedAnimation=loadedWeapon=loadedHands=null;
         live=null;profile=null;stream=null;loadedCalibration=null;
     }

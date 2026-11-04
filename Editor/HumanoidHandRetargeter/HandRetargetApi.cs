@@ -79,7 +79,8 @@ public static partial class HandRetargetApi
             "convert writes assets transactionally and validates engine output. Cancellation during preparation can leave reusable imports.",
             "Jobs run one at a time. Poll until succeeded, failed or cancelled. Jobs are memory-only and disappear on reload.",
             "An ambiguous mapping returns mapping_required. Supply explicit bone-name mappings after inspection; no auto-confirmation.",
-            "AutoConfigureAnimGraph preserves the source weapon graph through a generated live-retargeting prefab; source weapon assets remain required."}
+            "AutoConfigureAnimGraph preserves the source weapon graph through a generated live-retargeting prefab; source weapon assets remain required.",
+            "Generated graphs are AnimGraph2 (.ag, with .skel and .anim sources, assigned by animation_graph_name) when a source weapon or the target uses AnimGraph2; inspect results report animGraph."}
     });
     internal static string Serialize(object value)=>JsonSerializer.Serialize(value,Json);
     internal static Request Parse(string text)
@@ -189,13 +190,14 @@ public static partial class HandRetargetApi
         if(request.Operation=="inspectSource")
         {
             stage("loading source");var source=await HandEditorPipeline.LoadSourceAsync(request.Path,request.Fps,token);
-            return new{source.Path,source.ModelPath,rig=Inspect(source.Scene.Skeleton,source.Mapping),source.Scene.Notes,
+            return new{source.Path,source.ModelPath,animGraph=source.ModelPath is null?null:AnimGraphVersions.Describe(HandEditorPipeline.AnimGraphOf(source.ModelPath)),
+                rig=Inspect(source.Scene.Skeleton,source.Mapping),source.Scene.Notes,
                 clips=source.Scene.Clips.Select(c=>new{c.Name,c.Fps,c.FrameCount,c.Duration,c.Looping})};
         }
         stage("loading target");var target=await HandEditorPipeline.LoadTargetAsync(request.Operation=="inspectTarget"?request.Path:request.Target,token);
         target.Mapping=Map(target.Skeleton,request.TargetMapping,target.Mapping);
         if(request.TargetPalmFrames is not null)target.PalmFrames=request.TargetPalmFrames;
-        if(request.Operation=="inspectTarget")return new{target.ModelPath,target.ImportNotes,rig=Inspect(target.Skeleton,target.Mapping)};
+        if(request.Operation=="inspectTarget")return new{target.ModelPath,animGraph=AnimGraphVersions.Describe(HandEditorPipeline.AnimGraphOf(target.ModelPath)),target.ImportNotes,rig=Inspect(target.Skeleton,target.Mapping)};
         if(target.Mapping.NeedsReview)throw new MappingRequiredException("target",Inspect(target.Skeleton,target.Mapping));
         var inputs=new List<(HandSource Source,Clip[] Clips)>();
         foreach(var input in request.Sources)
