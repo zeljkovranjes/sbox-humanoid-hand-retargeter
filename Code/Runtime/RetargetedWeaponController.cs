@@ -50,7 +50,7 @@ public sealed class RetargetedWeaponController : Component, ICameraModifier
         if(!magazine.TryFire()){weapon.DryFire();return false;}
         weapon.Attack();weapon.SetEmpty(Ammo==0);ShotsFired++;
         UpdateBodyPose();
-        Player.Renderer?.Set("b_attack",true);
+        if(Player.Renderer is {} body)AnimGraphParameters.Trigger(body,"b_attack");
         var eye=Player.EyeTransform;
         var hit=Scene.Trace.Ray(eye.Position,eye.Position+eye.Rotation.Forward*Range)
             .IgnoreGameObjectHierarchy(Player.GameObject).IgnoreGameObjectHierarchy(GameObject).UseHitboxes().Run();
@@ -69,7 +69,7 @@ public sealed class RetargetedWeaponController : Component, ICameraModifier
         if(magazine is null||weapon is null||!magazine.BeginReload())return false;
         weapon.Reload(Ammo==0);reloadEnds=Time.Now+(Ammo==0?EmptyReloadSeconds:ReloadSeconds);
         UpdateBodyPose();
-        Player?.Renderer?.Set("b_reload",true);
+        if(Player?.Renderer is {} body)AnimGraphParameters.Trigger(body,"b_reload");
         return true;
     }
     public void Aim(bool value){Aiming=value&&!Reloading;if(weapon is not null)weapon.Aiming=Aiming;}
@@ -101,8 +101,8 @@ public sealed class RetargetedWeaponController : Component, ICameraModifier
     private void UpdateBodyPose()
     {
         if(Player?.Renderer is not {} body)return;
-        body.Set("holdtype",BodyHoldType);body.Set("holdtype_handedness",BodyHandedness);
-        body.Set("aim_body_weight",1f);
+        AnimGraphParameters.Set(body,"holdtype",BodyHoldType);AnimGraphParameters.Set(body,"holdtype_handedness",BodyHandedness);
+        AnimGraphParameters.Set(body,"aim_body_weight",1f);
     }
     public void ModifyCamera(CameraComponent camera,ref CameraView view)
     {
@@ -123,6 +123,6 @@ public sealed class RetargetedWeaponController : Component, ICameraModifier
     {
         magazine?.CancelReload();Aiming=false;
         if(weapon is not null){weapon.Aiming=false;weapon.ThirdPersonBody=null;}
-        Player?.Renderer?.Set("holdtype",0);
+        if(Player?.Renderer is {} body)AnimGraphParameters.Set(body,"holdtype",0);
     }
 }
