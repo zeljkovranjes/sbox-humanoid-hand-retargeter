@@ -45,8 +45,11 @@ internal static class HandWeaponExport
         finally{scene.Destroy();}
     }
 
+    /// <summary>Weapons keep their own graph (AnimGraph1 or AnimGraph2). For a weapon without one, generates an animation
+    /// owner whose action graph is AnimGraph2 (<c>.ag</c> with its <c>.skel</c> and <c>.anim</c> sources) when
+    /// <paramref name="animGraph2"/>, else AnimGraph1 (<c>.vanmgrph</c>).</summary>
     public static IReadOnlyList<Bundle> Prepare(HandTarget target,IReadOnlyList<HandBakedClip> clips,string outputModel,
-        Dictionary<string,string> animations,Dictionary<string,string> assets,CancellationToken cancel)
+        Dictionary<string,string> animations,Dictionary<string,string> assets,CancellationToken cancel,bool animGraph2=false)
     {
         var result=new List<Bundle>();
         foreach(var group in clips.Where(c=>c.Source.ModelPath is not null)
@@ -56,24 +59,22 @@ internal static class HandWeaponExport
             var first=group.First();var source=first.Source;
             // Keep the native graph and its original model together: all subgraphs, additive
             // layers, selectors, masks, procedural nodes and unselected sequences remain intact.
+            var sourceAsset=Model.Load(source.ModelPath!);
+            if(AnimGraphVersions.GraphPathOf(sourceAsset) is {} animGraph2Path)
+            {
+                if(!AnimGraphVersions.CanLoadAnimGraph2(animGraph2Path))throw new InvalidOperationException(MissingGraph);
+                result.Add(Live(target,first,outputModel,animGraph2Path));
+                continue;
+            }
             var sourceWorld=new SceneWorld();
-            var sourceModel=new SceneModel(sourceWorld,Model.Load(source.ModelPath!),Transform.Zero){UseAnimGraph=true};
+            var sourceModel=new SceneModel(sourceWorld,sourceAsset,Transform.Zero){UseAnimGraph=true};
             try
             {
                 if(sourceModel.AnimationGraph is {IsError:true})
-                    throw new InvalidOperationException("The source AnimGraph could not load. Restore its dependencies before exporting; it will not be replaced with a simplified graph.");
+                    throw new InvalidOperationException(MissingGraph);
                 if(sourceModel.AnimationGraph is {IsError:false} originalGraph)
                 {
-                    var setup=LiveHandSetup.Create(source.Scene.Skeleton,source.Mapping,target.Skeleton,target.Mapping,
-                        source.PalmFrames,target.PalmFrames,first.MotionOptions??new(){WeaponSpaceOffset=first.WeaponOffset});
-                    var calibration=setup.Serialize();
-                    // Validate the persisted form, including reviewed mappings and manual palm frames.
-                    _=LiveHandSetup.Deserialize(calibration).Calibrate();
-                    var liveIdentity=HandEditorPipeline.ContentKey("live-graph-v2-controls"+source.ModelPath+target.ModelPath+originalGraph.Name+calibration);
-                    var liveFolder=outputModel[..^5]+"_weapons/"+HandEditorPipeline.SourceKey(source)+"/"+liveIdentity;
-                    var liveEye=HumanoidHandRetargeter.Calibration.HandViewSpace.EyePosition(source.Scene.Skeleton,source.Mapping)/2.54f;
-                    result.Add(new(source.ModelPath!,originalGraph.Name,source.ModelPath!,target.ModelPath,[],source.Scene.Skeleton.Count,
-                        new global::Vector3(liveEye.X,liveEye.Y,liveEye.Z),calibration,liveFolder+"/weapon.prefab"));
+                    result.Add(Live(target,first,outputModel,originalGraph.Name));
                     continue;
                 }
             }
@@ -99,9 +100,9 @@ internal static class HandWeaponExport
             var bind=DmxWriter.Write(rig,new Clip("bindPose",30,false,new(){Pose.Rest(rig).Locals}),new(){Name="bindPose",UpAxisY=false,ForwardParity=1});
             var graphClips=merged.Select(p=>new WeaponGraphClip(p.Action,p.Clip.Animation.Name)).ToArray();
             // Include graph schema in the content identity so future generator changes preserve old graphs.
-            var identity=HandEditorPipeline.ContentKey(AnimationDriverMesh.Fbx+bind+string.Join("\n",contents.Values)+WeaponAnimGraph.Create("owner.vmdl",graphClips));
+            var identity=HandEditorPipeline.ContentKey(AnimationDriverMesh.Fbx+bind+string.Join("\n",contents.Values)+WeaponAnimGraph.Create("owner.vmdl",graphClips)+(animGraph2?AnimGraph2Identity:""));
             var folder=outputModel[..^5]+"_weapons/"+HandEditorPipeline.SourceKey(source)+"/"+identity;
-            var model=folder+"/animation.vmdl";var graph=folder+"/weapon.vanmgrph";
+            var model=folder+"/animation.vmdl";var graph=folder+(animGraph2?"/weapon.ag":"/weapon.vanmgrph");
             animations[folder+"/bind.dmx"]=bind;
             assets[folder+"/driver_mesh.fbx"]=AnimationDriverMesh.Fbx;
             animations[folder+"/skeleton.dmx"]=DmxWriter.Write(rig,new Clip("bindPose",30,false,new(){Pose.Rest(rig).Locals}),new(){Name="bindPose",UpAxisY=false,ForwardParity=1,SkeletonModel=true});
@@ -109,7 +110,7 @@ internal static class HandWeaponExport
             var doc=Kv3.Parse(HandModelFactory.Create(baseModel:source.ModelPath!));
             var root=(KvObject)((KvObject)doc.Root)["rootNode"];
             root["base_model_name"]=new KvString("");
-            root["anim_graph_name"]=new KvString(graph);
+            root[animGraph2?VmdlSetupService.AnimGraph2Key:"anim_graph_name"]=new KvString(graph);
             var children=(KvArray)root["children"];
             var meshes=new KvArray();meshes.Items.Add(new KvObject{["_class"]=new KvString("RenderMeshFile"),["filename"]=new KvString(folder+"/driver_mesh.fbx"),["name"]=new KvString("animation_driver"),["import_scale"]=new KvDouble(1)});
             children.Items.Add(new KvObject{["_class"]=new KvString("RenderMeshList"),["children"]=meshes});
@@ -119,10 +120,40 @@ internal static class HandWeaponExport
             children.Items.Add(new KvObject{["_class"]=new KvString("BoneMarkupList"),["bone_cull_type"]=new KvString("None"),["children"]=new KvArray()});
             var prepared=VmdlSetupService.Prepare(Kv3.Serialize(doc),graphClips.Select(c=>new HandAnimationEntry(c.Sequence,folder+"/"+c.Sequence+".dmx",c.Action==WeaponAction.Idle)),
                 new(){ModelPath=model,BindPoseSource=folder+"/bind.dmx",AutoConfigureAnimGraph=false});
-            assets[graph]=WeaponAnimGraph.Create(model,graphClips);assets[model]=prepared.VmdlText;
+            if(animGraph2)
+            {
+                // The skeleton comes from the owner's skeleton source, each clip from the DMX the owner plays.
+                var scale=AnimGraph2Sources.ModelScale(root);
+                var skeleton=folder+"/skeleton.skel";assets[skeleton]=AnimGraph2Sources.Skeleton(folder+"/skeleton.dmx",scale);
+                var clipFiles=graphClips.ToDictionary(c=>c.Sequence,c=>folder+"/"+c.Sequence+".anim");
+                foreach(var clip in graphClips)assets[clipFiles[clip.Sequence]]=AnimGraph2Sources.Clip(folder+"/"+clip.Sequence+".dmx",skeleton);
+                assets[graph]=AnimGraph2Writer.Write(WeaponAnimGraph.Create(model,graphClips),model,skeleton,clipFiles);
+            }
+            else assets[graph]=WeaponAnimGraph.Create(model,graphClips);
+            assets[model]=prepared.VmdlText;
             var eye=HumanoidHandRetargeter.Calibration.HandViewSpace.EyePosition(source.Scene.Skeleton,source.Mapping)/2.54f;
             result.Add(new(model,graph,source.ModelPath!,target.ModelPath,graphClips,rig.Count,new global::Vector3(eye.X,eye.Y,eye.Z)));
         }
         return result;
+    }
+
+    const string MissingGraph="The source AnimGraph could not load. Restore its dependencies before exporting; it will not be replaced with a simplified graph.";
+    // Keeps AnimGraph2 owners in their own folder: an AnimGraph1 owner of the same motion is a different file set.
+    const string AnimGraph2Identity="animgraph2";
+
+    // A prefab retargeting the source weapon's own graph to the custom hands live.
+    static Bundle Live(HandTarget target,HandBakedClip first,string outputModel,string graphName)
+    {
+        var source=first.Source;
+        var setup=LiveHandSetup.Create(source.Scene.Skeleton,source.Mapping,target.Skeleton,target.Mapping,
+            source.PalmFrames,target.PalmFrames,first.MotionOptions??new(){WeaponSpaceOffset=first.WeaponOffset});
+        var calibration=setup.Serialize();
+        // Validate the persisted form, including reviewed mappings and manual palm frames.
+        _=LiveHandSetup.Deserialize(calibration).Calibrate();
+        var liveIdentity=HandEditorPipeline.ContentKey("live-graph-v2-controls"+source.ModelPath+target.ModelPath+graphName+calibration);
+        var liveFolder=outputModel[..^5]+"_weapons/"+HandEditorPipeline.SourceKey(source)+"/"+liveIdentity;
+        var liveEye=HumanoidHandRetargeter.Calibration.HandViewSpace.EyePosition(source.Scene.Skeleton,source.Mapping)/2.54f;
+        return new(source.ModelPath!,graphName,source.ModelPath!,target.ModelPath,[],source.Scene.Skeleton.Count,
+            new global::Vector3(liveEye.X,liveEye.Y,liveEye.Z),calibration,liveFolder+"/weapon.prefab");
     }
 }

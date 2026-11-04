@@ -19,7 +19,7 @@ Add the library to your s&box project and open the **Humanoid Hand Retargeter** 
 5. Enable **Auto Configure AnimGraph** if you want weapon graph setup.
 6. Choose an output path and click **Convert All**.
 
-Generated weapon prefabs that use an existing AnimGraph still require the original weapon assets. Unrecognized or ambiguous rigs may need manual mapping.
+Generated weapon prefabs that use an existing AnimGraph still require the original weapon assets. When the source weapon or the target uses AnimGraph2, generated graphs are AnimGraph2 (`.ag`, with `.skel` and `.anim` sources); otherwise they are AnimGraph1 (`.vanmgrph`) as before. The dock shows which system the target and each source weapon use. Unrecognized or ambiguous rigs may need manual mapping.
 
 Package ident: `chomnr_humanoid_hand_retargeter`
 
